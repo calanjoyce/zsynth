@@ -34,6 +34,8 @@
 #define NPARAM 10
 #define MAXSAMP (SR * 5)
 #define SCOPE 640
+#define NPAT 8
+#define MAXCHAIN 64
 
 enum { P_WAVE, P_CUT, P_RES, P_ATK, P_DEC, P_SUS, P_REL, P_ENV, P_DET, P_VOL };
 enum { T_LEAD, T_BASS, T_SAMP, T_DRUM };
@@ -51,6 +53,10 @@ typedef struct {
     float scope[SCOPE];
     uint8_t grid[NTRACK][NSTEP];
     uint8_t samp_ov[256];
+    /* pattern banks and song chain (offset 2928) */
+    int32_t cur_pat, next_pat, song_mode, chain_pos, chain_len, saved_seq;
+    uint8_t chain[MAXCHAIN];
+    uint8_t pgrid[NPAT][NTRACK][NSTEP];
 } Shm;
 
 typedef struct {
@@ -67,9 +73,13 @@ typedef struct {
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static float P[NTRACK][NPARAM];
-static Ev evs[NTRACK][MAXEV];
-static int nev[NTRACK];
+static Ev evs[NPAT][NTRACK][MAXEV];
+static int nev[NPAT][NTRACK];
+static int cur_pat, next_pat = -1, song_mode, chain_pos, chain_len, saved_seq;
+static int chain[MAXCHAIN];
+static int just_started;
 static int pend[NTRACK][128]; /* index of event being recorded, -1 none */
+static int pend_p[NTRACK][128];
 static long long pend_t[NTRACK][128];
 static Voice V[NVOICE];
 static long long now_t;
@@ -85,7 +95,8 @@ static int scope_pos;
 static volatile int running = 1;
 
 /* sample recording */
-static volatile int sampling;
+static volatile int sampling;  /* request: keep capturing */
+static volatile int capturing; /* capture thread busy, incl. saving */
 static float *rec_buf;
 static int rec_len;
 static float in_level;
@@ -270,11 +281,33 @@ static float voice(Voice *v) {
     return v->lp * v->env * v->vel;
 }
 
+static void switch_pattern(int p) {
+    if (p == cur_pat) return;
+    /* drop pending skips: that pattern's next pass starts fresh */
+    for (int tr = 0; tr < NTRACK; tr++)
+        for (int i = 0; i < nev[cur_pat][tr]; i++) evs[cur_pat][tr][i].skip = 0;
+    cur_pat = p;
+}
+
+/* Called when the loop wraps to step 0: move on in the chain or to a
+   queued pattern. */
+static void loop_wrap(void) {
+    if (just_started) { just_started = 0; return; }
+    if (song_mode && chain_len > 0) {
+        chain_pos = (chain_pos + 1) % chain_len;
+        switch_pattern(chain[chain_pos]);
+    } else if (next_pat >= 0) {
+        switch_pattern(next_pat);
+        next_pat = -1;
+    }
+}
+
 static void seq_tick(void) {
     double len = sps();
+    if (step == 0) loop_wrap();
     for (int tr = 0; tr < NTRACK; tr++)
-        for (int i = 0; i < nev[tr]; i++) {
-            Ev *e = &evs[tr][i];
+        for (int i = 0; i < nev[cur_pat][tr]; i++) {
+            Ev *e = &evs[cur_pat][tr][i];
             if (e->step != step) continue;
             if (e->skip) { e->skip = 0; continue; }
             note_on(tr, e->note, e->vel, 1,
@@ -321,15 +354,26 @@ static void publish(void) {
     shm->rec = rec;
     shm->step = step;
     shm->bpm = bpm;
-    shm->sampling = sampling;
+    shm->sampling = capturing;
     shm->sample_len = sample_len;
     shm->in_level = in_level;
     for (int i = 0; i < SCOPE; i++)
         shm->scope[i] = scope_ring[(scope_pos - SCOPE + i) & 2047];
-    memset(shm->grid, 0, sizeof shm->grid);
-    for (int tr = 0; tr < NTRACK; tr++)
-        for (int i = 0; i < nev[tr]; i++)
-            if (shm->grid[tr][evs[tr][i].step] < 255) shm->grid[tr][evs[tr][i].step]++;
+    memset(shm->pgrid, 0, sizeof shm->pgrid);
+    for (int p = 0; p < NPAT; p++)
+        for (int tr = 0; tr < NTRACK; tr++)
+            for (int i = 0; i < nev[p][tr]; i++) {
+                uint8_t *c = &shm->pgrid[p][tr][evs[p][tr][i].step];
+                if (*c < 255) (*c)++;
+            }
+    memcpy(shm->grid, shm->pgrid[cur_pat], sizeof shm->grid);
+    shm->cur_pat = cur_pat;
+    shm->next_pat = next_pat;
+    shm->song_mode = song_mode;
+    shm->chain_pos = chain_pos;
+    shm->chain_len = chain_len;
+    shm->saved_seq = saved_seq;
+    for (int i = 0; i < MAXCHAIN; i++) shm->chain[i] = (uint8_t)chain[i];
     shm->frame++;
 }
 
@@ -372,7 +416,7 @@ static int wav_read(const char *path, float **outp) {
     int n = -1;
     float *o = NULL;
     if (fread(id, 1, 4, f) != 4 || memcmp(id, "RIFF", 4)) goto done;
-    fseek(f, 8, SEEK_SET);
+    fseek(f, 12, SEEK_SET); /* skip "RIFF", size, "WAVE" */
     while (fread(id, 1, 4, f) == 4 && fread(&sz, 4, 1, f) == 1) {
         if (!memcmp(id, "fmt ", 4)) {
             uint8_t b[16];
@@ -437,7 +481,7 @@ static void *capture(void *arg) {
                                   "sampler", &ss, NULL, &ba, &err);
     if (!pc) {
         fprintf(stderr, "engine: capture open failed: %s\n", pa_strerror(err));
-        sampling = 0;
+        sampling = capturing = 0;
         return NULL;
     }
     int16_t buf[480];
@@ -459,7 +503,11 @@ static void *capture(void *arg) {
     /* trim leading/trailing quiet, then normalise */
     float pk = 0;
     for (int i = 0; i < rec_len; i++) if (fabsf(rec_buf[i]) > pk) pk = fabsf(rec_buf[i]);
-    if (pk < 0.0015f) { fprintf(stderr, "engine: sample silent\n"); return NULL; }
+    if (pk < 0.0015f) {
+        fprintf(stderr, "engine: sample silent\n");
+        capturing = 0;
+        return NULL;
+    }
     float thr = pk * 0.06f;
     int a = 0, b = rec_len - 1;
     while (a < b && fabsf(rec_buf[a]) < thr) a++;
@@ -475,6 +523,7 @@ static void *capture(void *arg) {
     }
     if (sample_path[0]) wav_write(sample_path, o, n);
     set_sample(o, n);
+    capturing = 0;
     return NULL;
 }
 
@@ -482,90 +531,165 @@ static void *capture(void *arg) {
 static void pat_save(const char *path) {
     FILE *f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "bpm %d\n", bpm);
-    for (int tr = 0; tr < NTRACK; tr++)
-        for (int i = 0; i < nev[tr]; i++)
-            fprintf(f, "ev %d %d %d %d %d\n", tr, evs[tr][i].step, evs[tr][i].note,
-                    evs[tr][i].vel, evs[tr][i].len);
+    fprintf(f, "bpm %d\nsongmode %d\nchain", bpm, song_mode);
+    for (int i = 0; i < chain_len; i++) fprintf(f, " %d", chain[i]);
+    fprintf(f, "\n");
+    for (int p = 0; p < NPAT; p++)
+        for (int tr = 0; tr < NTRACK; tr++)
+            for (int i = 0; i < nev[p][tr]; i++) {
+                Ev *e = &evs[p][tr][i];
+                fprintf(f, "ev %d %d %d %d %d %d\n", p, tr, e->step, e->note,
+                        e->vel, e->len);
+            }
     fclose(f);
 }
 
+static void reset_song(void) {
+    memset(nev, 0, sizeof nev);
+    memset(pend, -1, sizeof pend);
+    chain_len = chain_pos = song_mode = cur_pat = 0;
+    next_pat = -1;
+}
+
+static void parse_chain(const char *s) {
+    chain_len = 0;
+    int v, n;
+    while (chain_len < MAXCHAIN && sscanf(s, "%d%n", &v, &n) == 1) {
+        if (v >= 0 && v < NPAT) chain[chain_len++] = v;
+        s += n;
+    }
+    if (chain_pos >= chain_len) chain_pos = 0;
+}
+
+static void add_ev(int p, int tr, int st, int no, int ve, int le) {
+    if (p < 0 || p >= NPAT || tr < 0 || tr >= NTRACK || nev[p][tr] >= MAXEV) return;
+    Ev e = {(uint8_t)(st % NSTEP), (uint8_t)no, (uint8_t)ve, (uint8_t)le, 0};
+    evs[p][tr][nev[p][tr]++] = e;
+}
+
+/* Reads a song or pattern file. Lines it doesn't know are ignored, so the
+   UI can keep its own settings in the same file. Old 5-field "ev" lines
+   (from before pattern banks) go into pattern 1. */
 static void pat_load(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) return;
-    char ln[128];
-    memset(nev, 0, sizeof nev);
+    char ln[512];
+    reset_song();
     while (fgets(ln, sizeof ln, f)) {
-        int tr, st, no, ve, le, b;
-        if (sscanf(ln, "bpm %d", &b) == 1 && b >= 40 && b <= 300) bpm = b;
-        else if (sscanf(ln, "ev %d %d %d %d %d", &tr, &st, &no, &ve, &le) == 5 &&
-                 tr >= 0 && tr < NTRACK && nev[tr] < MAXEV) {
-            Ev e = {(uint8_t)(st % NSTEP), (uint8_t)no, (uint8_t)ve, (uint8_t)le, 0};
-            evs[tr][nev[tr]++] = e;
-        }
+        int p, tr, st, no, ve, le, b;
+        if (sscanf(ln, "bpm %d", &b) == 1) { if (b >= 40 && b <= 300) bpm = b; }
+        else if (sscanf(ln, "songmode %d", &b) == 1) song_mode = b != 0;
+        else if (!strncmp(ln, "chain", 5)) parse_chain(ln + 5);
+        else if (sscanf(ln, "ev %d %d %d %d %d %d", &p, &tr, &st, &no, &ve, &le) == 6)
+            add_ev(p, tr, st, no, ve, le);
+        else if (sscanf(ln, "ev %d %d %d %d %d", &tr, &st, &no, &ve, &le) == 5)
+            add_ev(0, tr, st, no, ve, le);
     }
     fclose(f);
+    if (song_mode && chain_len) cur_pat = chain[0];
+}
+
+/* Text after a command word, without the newline (paths may have spaces). */
+static const char *arg(char *ln, const char *cmd) {
+    size_t n = strlen(cmd);
+    if (strncmp(ln, cmd, n) || ln[n] != ' ') return NULL;
+    ln[strcspn(ln, "\r\n")] = 0;
+    return ln + n + 1;
 }
 
 /* ---------- commands ---------- */
 static void handle_cmd(char *ln) {
     int tr, a, b;
     float x;
-    char path[480];
+    const char *path;
+    Ev (*pat)[MAXEV] = evs[cur_pat];
+    int *pn = nev[cur_pat];
     if (sscanf(ln, "on %d %d %d", &tr, &a, &b) == 3 && tr >= 0 && tr < NTRACK && a >= 0 && a < 128) {
         note_on(tr, a, b, 0, -1);
-        if (playing && rec && nev[tr] < MAXEV) {
+        if (playing && rec && pn[tr] < MAXEV) {
             double pos = step + step_phase / sps();
             int q = (int)floor(pos + 0.5);
             Ev e = {(uint8_t)(q % NSTEP), (uint8_t)a, (uint8_t)b, 1, (uint8_t)(q > step)};
-            evs[tr][nev[tr]] = e;
-            pend[tr][a] = nev[tr]++;
+            pat[tr][pn[tr]] = e;
+            pend[tr][a] = pn[tr]++;
+            pend_p[tr][a] = cur_pat;
             pend_t[tr][a] = now_t;
         }
     } else if (sscanf(ln, "off %d %d", &tr, &a) == 2 && tr >= 0 && tr < NTRACK && a >= 0 && a < 128) {
         note_off(tr, a);
-        if (pend[tr][a] >= 0) {
+        int i = pend[tr][a], p = pend_p[tr][a];
+        if (i >= 0 && i < nev[p][tr]) {
             int l = (int)floor((now_t - pend_t[tr][a]) / sps() + 0.5);
-            evs[tr][pend[tr][a]].len = (uint8_t)(l < 1 ? 1 : l > 16 ? 16 : l);
-            pend[tr][a] = -1;
+            evs[p][tr][i].len = (uint8_t)(l < 1 ? 1 : l > 16 ? 16 : l);
         }
+        pend[tr][a] = -1;
     } else if (sscanf(ln, "set %d %d %f", &tr, &a, &x) == 3 && tr >= 0 && tr < NTRACK && a >= 0 && a < NPARAM) {
         P[tr][a] = x;
     } else if (!strncmp(ln, "play", 4)) {
         playing = 1; step = NSTEP - 1; step_phase = sps() - 1;
+        just_started = 1;
+        if (song_mode && chain_len) { chain_pos = 0; switch_pattern(chain[0]); }
+        else if (next_pat >= 0) { switch_pattern(next_pat); next_pat = -1; }
     } else if (!strncmp(ln, "stop", 4)) {
         playing = 0;
         for (int i = 0; i < NVOICE; i++) if (V[i].seq) V[i].stage = 3;
+        if (next_pat >= 0) { switch_pattern(next_pat); next_pat = -1; }
     } else if (sscanf(ln, "rec %d", &a) == 1) {
         rec = a;
     } else if (sscanf(ln, "bpm %d", &a) == 1 && a >= 40 && a <= 300) {
         bpm = a;
-    } else if (!strncmp(ln, "clear all", 9)) {
-        memset(nev, 0, sizeof nev);
+    } else if (sscanf(ln, "pat %d", &a) == 1 && a >= 0 && a < NPAT) {
+        if (playing && !song_mode) next_pat = a == cur_pat ? -1 : a;
+        else if (!playing) switch_pattern(a);
+    } else if (sscanf(ln, "songmode %d", &a) == 1) {
+        song_mode = a != 0;
+        if (song_mode && !playing && chain_len) { chain_pos = 0; switch_pattern(chain[0]); }
+        if (song_mode) next_pat = -1;
+    } else if (!strncmp(ln, "chain", 5) && (ln[5] == ' ' || ln[5] == '\n')) {
+        parse_chain(ln + 5);
+    } else if (sscanf(ln, "copy %d %d", &a, &b) == 2 && a >= 0 && a < NPAT && b >= 0 && b < NPAT) {
+        if (a != b) { memcpy(evs[b], evs[a], sizeof evs[a]); memcpy(nev[b], nev[a], sizeof nev[a]); }
+    } else if (sscanf(ln, "clearpat %d", &a) == 1 && a >= 0 && a < NPAT) {
+        memset(nev[a], 0, sizeof nev[a]);
+    } else if (!strncmp(ln, "new", 3)) {
+        reset_song();
     } else if (sscanf(ln, "clear %d", &tr) == 1 && tr >= 0 && tr < NTRACK) {
-        nev[tr] = 0;
+        pn[tr] = 0;
     } else if (sscanf(ln, "undo %d", &tr) == 1 && tr >= 0 && tr < NTRACK) {
-        if (nev[tr] > 0) nev[tr]--;
-    } else if (sscanf(ln, "samppath %479s", path) == 1) {
+        if (pn[tr] > 0) pn[tr]--;
+    } else if ((path = arg(ln, "samppath"))) {
         snprintf(sample_path, sizeof sample_path, "%s", path);
     } else if (!strncmp(ln, "samprec start", 13)) {
-        if (!sampling) {
-            sampling = 1;
+        if (!capturing) {
+            sampling = capturing = 1;
             pthread_create(&cap_thr, NULL, capture, NULL);
             pthread_detach(cap_thr);
         }
     } else if (!strncmp(ln, "samprec stop", 12)) {
         sampling = 0;
-    } else if (sscanf(ln, "sampload %479s", path) == 1) {
-        float *buf;
+    } else if (!strncmp(ln, "sampclear", 9)) {
         pthread_mutex_unlock(&mu);
-        int n = wav_read(path, &buf);
-        if (n > 0) set_sample(buf, n);
-        else fprintf(stderr, "engine: cannot load %s\n", path);
+        set_sample(NULL, 0);
         pthread_mutex_lock(&mu);
-    } else if (sscanf(ln, "save %479s", path) == 1) {
-        pat_save(path);
-    } else if (sscanf(ln, "load %479s", path) == 1) {
+    } else if ((path = arg(ln, "sampload"))) {
+        float *buf;
+        char p2[512];
+        snprintf(p2, sizeof p2, "%s", path);
+        pthread_mutex_unlock(&mu);
+        int n = wav_read(p2, &buf);
+        if (n > 0) set_sample(buf, n);
+        else fprintf(stderr, "engine: cannot load %s\n", p2);
+        pthread_mutex_lock(&mu);
+    } else if (sscanf(ln, "save %d", &a) == 1) {
+        /* "save SEQ PATH": SEQ is echoed in shm once the file is written */
+        char *sp = strchr(ln + 5, ' ');
+        if (sp) {
+            sp[strcspn(sp, "\r\n")] = 0;
+            pat_save(sp + 1);
+        }
+        saved_seq = a;
+        shm->saved_seq = a;
+    } else if ((path = arg(ln, "load"))) {
         pat_load(path);
     } else if (!strncmp(ln, "quit", 4)) {
         running = 0;

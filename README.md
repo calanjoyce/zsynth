@@ -1,9 +1,11 @@
 # ZSynth
 
 A pocket groovebox for the M5Stack **Cardputer Zero**: two synths, a mic
-sampler and a drum kit, with a 16-step sequencer that records what you play.
+sampler and a drum kit, eight 16-step patterns per song, a song chain, and a
+library of songs and samples.
 
-![ZSynth lead track](docs/lead.png) ![ZSynth drum track](docs/drums.png)
+![Main screen](docs/drums.png) ![Song screen](docs/song.png)
+![Files screen](docs/files.png)
 
 ## Features
 
@@ -19,10 +21,29 @@ sampler and a drum kit, with a 16-step sequencer that records what you play.
   hats, low and high toms, cowbell and crash.
 - **Sequencer**: a 16-step loop. Arm recording and play along; notes snap to
   16ths, note lengths are kept, and a metronome clicks while you record.
+- **Pattern banks**: 8 patterns per song. Switching while the loop plays
+  waits until the end of the bar. You can copy and paste whole patterns.
+- **Song mode**: chain patterns (for example 1 1 2 3) and play them in order.
+- **Songs**: save, save as, new, open and delete named songs. A song keeps its
+  patterns, chain, tempo, sound settings and which sample it uses.
+- **Sample library**: every mic recording is saved as its own WAV. Load any
+  of them into the sampler, or delete the ones you don't want.
 - **Live scope**, step grid and settings on the 320×170 screen.
-- Everything is saved when you quit: the song, the sounds and the sample.
+- The open song is saved automatically when you quit or switch songs.
+
+## Screens
+
+`Tab` cycles through three screens:
+
+- **Main**: play, record, the scope and sound settings, and the current
+  pattern's step grid.
+- **Song**: the eight pattern slots, with a preview of each, and the chain.
+- **Files**: songs on the left, samples on the right.
 
 ## Keys
+
+`Fn` + a key uses the Cardputer's function layer: `Fn`+number row gives
+F1–F10, `Fn`+`F` `Z` `X` `C` gives the arrow keys, and `Fn`+`H` gives Help.
 
 | Key | Action |
 | --- | --- |
@@ -31,19 +52,32 @@ sampler and a drum kit, with a 16-step sequencer that records what you play.
 | `Space` | play / stop the loop |
 | `Enter` | record on/off: play while it loops |
 | `Backspace` | undo the last recorded note |
-| `Tab` | help screen |
-| `Esc` | quit (everything is saved) |
+| `Tab` | next screen: Main → Song → Files |
+| `Fn` + `H` | help |
+| `Fn` + `1`–`8` | choose a pattern (while playing, it switches at the end of the loop) |
+| `Fn` + `0` | song mode on/off |
+| `Esc` | back to Main / quit (the song is saved) |
 | `Ctrl` + `1`–`4` | choose a track: lead, bass, sample, drums |
 | `Ctrl` + `Q` / `W` | choose a setting |
 | `Ctrl` + `A` / `S` | change it (hold to repeat) |
 | `Ctrl` + `Z` / `X` | octave down / up |
 | `Ctrl` + `B` / `N` | tempo down / up |
-| `Ctrl` + `R` | start / stop recording a sample from the mic |
-| `Ctrl` + `L` | load the next WAV from `~/.local/share/zsynth/samples/` |
-| `Ctrl` + `Backspace` | clear this track's pattern |
+| `Ctrl` + `C` / `V` | copy the current pattern / paste it into the current pattern |
+| `Ctrl` + `R` | start / stop recording a sample (saved to the library) |
+| `Ctrl` + `L` | load the next sample from the library |
+| `Ctrl` + `Backspace` | clear this track in the current pattern (on the Song screen: the whole pattern, after you press it twice) |
 
 `Alt` works the same as `Ctrl`. On the drum track, each key plays one drum;
 the key map is shown on screen.
+
+**Song screen:** `1`–`8` insert a pattern into the chain at the cursor,
+`Backspace` removes the one before the cursor, `Z`/`C` move the cursor, and
+`Enter` turns song mode on or off.
+
+**Files screen:** `F`/`X` move up and down, `Z`/`C` switch between Songs and
+Samples, `Enter` opens a song or loads a sample (or runs *new song* /
+*save as…*, which ask for a name), `S` saves the open song, and
+`Backspace`/`Del` pressed twice deletes the selected file.
 
 ## How it works
 
@@ -58,8 +92,18 @@ the key map is shown on screen.
   engine over a pipe. It is launched from the stock APPLaunch launcher like
   the built-in apps.
 
-Data lives in `~/.local/share/zsynth/`: `pattern.txt`, `state.json`,
-`sample.wav`, and a `samples/` folder for your own WAVs.
+Data lives in `~/.local/share/zsynth/`:
+
+- `songs/<name>.zsong` is a plain-text song file. It holds the sample name,
+  the sound settings, the tempo, the chain, and every note as
+  `ev pattern track step note velocity length`.
+- `samples/*.wav` is the sample library. Mic recordings are named
+  `rec-YYYYMMDD-HHMMSS.wav`. You can copy in your own 16-bit WAVs at any
+  sample rate, mono or stereo.
+- `state.json` remembers which song was open last.
+
+A single-pattern song from an earlier version is moved into
+`songs/my-first-song.zsong` the first time you open this version.
 
 ## Install
 
@@ -74,8 +118,9 @@ This copies the sources, installs `libpulse-dev` if needed, compiles the
 engine on the device, installs it to `/opt/zsynth`, and adds **ZSynth** to the
 launcher. Then restart the launcher.
 
-`test_ui.py` runs the app headless with simulated key presses and saves
-screenshots, which is handy for checking changes over SSH.
+`test_ui.py` runs the app headless with simulated key presses, checks
+pattern banks, the chain, song mode and saving/opening songs, and saves
+screenshots. Run it on the device with `python3 test_ui.py /tmp/zs`.
 
 ## Requirements
 
