@@ -17,6 +17,10 @@ python3 make_icon.py /tmp/zsynth.png
 sudo install -m 644 /tmp/zsynth.png /usr/share/APPLaunch/share/images/zsynth.png
 sudo install -m 644 zsynth.desktop /usr/share/APPLaunch/applications/zsynth.desktop
 mkdir -p ~/.local/share/zsynth/samples
-systemctl --user restart APPLaunch.service
-echo installed
+if pgrep -f /opt/zsynth/zsynth.py >/dev/null; then
+    echo "installed (ZSynth is open: reopen it to get the new version)"
+else
+    systemctl --user restart APPLaunch.service
+    echo installed
+fi
 '

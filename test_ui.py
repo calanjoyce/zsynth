@@ -109,6 +109,77 @@ check("Ctrl+C/V copies pattern 2 to 3",
       (st()["pgrid"][2] == st()["pgrid"][1]).all() and st()["pgrid"][2].any())
 snap("main")
 
+# ---- edit screen: drum grid on pattern 4 ----
+FK, ZK, XK, CK, AK = 33, 44, 45, 46, 30
+key(F(4))
+key(5, mod=True)                      # drums
+key(TAB)
+check("Tab opens the edit screen", app.screen == 1)
+app.drum_row, app.cur_step = 0, 0
+
+
+def evs(t):
+    time.sleep(0.08)
+    return sorted(app.events(t))
+
+
+for _ in range(4):                    # kick on 1 5 9 13
+    key(ENTER)
+    for _ in range(4):
+        key(CK)
+check("Enter writes kicks on steps 1 5 9 13",
+      [(e[0], e[1]) for e in evs(3)] == [(0, 36), (4, 36), (8, 36),
+                                         (12, 36)])
+key(XK)                               # down to snare
+for _ in range(4):
+    key(CK)
+key(ENTER)
+key(AK)
+snare = [e for e in evs(3) if e[1] == 38]
+check(f"snare + accent on step 5 ({snare})",
+      snare == [(4, 38, 127, 1)])
+key(FK)                               # back to kick, step 5
+key(ENTER)
+check("Enter on a hit removes it",
+      [e[0] for e in evs(3) if e[1] == 36] == [0, 8, 12])
+key(75)                               # ] shift right
+check("] shifts the drums right",
+      [e[0] for e in evs(3) if e[1] == 36] == [1, 9, 13])
+snap("drums")
+key(74)                               # [ shift back
+
+# ---- edit screen: step entry on the lead ----
+key(2, mod=True)                      # lead (octave 4: Z = C4 = 60)
+app.cur_step = 0
+key(ZK)                               # C on step 1
+app.on_key(ZK, 1)                     # chord C+E on step 2
+app.on_key(CK, 1)
+time.sleep(0.05)
+app.on_key(ZK, 0)
+app.on_key(CK, 0)
+key(ENTER)                            # rest on step 3
+key(73)                               # = : length 2
+key(XK)                               # D, 2 steps long, on step 4
+lead = [(e[0], e[1], e[3]) for e in evs(0)]
+check(f"step entry writes notes, chord, rest, length ({lead})",
+      lead == [(0, 60, 1), (1, 60, 1), (1, 64, 1), (3, 62, 2)]
+      and app.cur_step == 5)
+app.cur_step = 0
+key(ZK)                               # same note again removes it
+check("same note on a step removes it",
+      (0, 60) not in [(e[0], e[1]) for e in evs(0)])
+app.cur_step = 1
+key(BKSP)
+check("Bksp clears the step",
+      [(e[0], e[1]) for e in evs(0)] == [(3, 62)])
+key(105)                              # Fn+Z (left) moves left
+check("Fn+Z moves the cursor", app.cur_step == 0)
+key(71)                               # - : back to length 1
+for k in (ZK, 46, 48, 49, 48, 47, 46, 16):   # a little tune to look at
+    key(k)
+snap("roll")
+key(3, mod=True)                      # back to bass for the rest
+
 # song screen: chain 2 2 3 1, song mode
 key(TAB)
 for d in (3, 3, 4, 2):                # keys 2 2 3 1
@@ -152,6 +223,8 @@ s2 = st()
 check("reopened song has its patterns and chain",
       app.song == "test" and s2["pgrid"][1].any() and s2["pgrid"][2].any()
       and s2["chain_len"] == 4 and app.chain == [1, 1, 2, 0])
+check("step-edited pattern 4 was saved too",
+      s2["pgrid"][3][3].sum() >= 4 and s2["pgrid"][3][0].sum() >= 4)
 
 # samples column
 app.files_col = 1

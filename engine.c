@@ -2,7 +2,8 @@
  * zsynth-engine: real-time audio engine for ZSynth on the Cardputer Zero.
  *
  * Four tracks: 0 lead synth, 1 bass synth, 2 sampler, 3 drum kit.
- * A 16-step sequencer records what is played live (quantised to 16ths).
+ * A 16-step sequencer records what is played live (quantised to 16ths), and
+ * notes can also be written one step at a time (stepset / stepdel / shift).
  *
  * Control: newline-separated text commands on stdin (see handle_cmd).
  * Status:  a small struct mmapped at /dev/shm/zsynth.state for the UI.
@@ -57,6 +58,10 @@ typedef struct {
     int32_t cur_pat, next_pat, song_mode, chain_pos, chain_len, saved_seq;
     uint8_t chain[MAXCHAIN];
     uint8_t pgrid[NPAT][NTRACK][NSTEP];
+    /* every note of the current pattern, for the step editor (offset 3528):
+       per track a count, then (step, note, vel, len) per event */
+    int32_t ev_n[NTRACK];
+    uint8_t ev[NTRACK][MAXEV][4];
 } Shm;
 
 typedef struct {
@@ -367,6 +372,14 @@ static void publish(void) {
                 if (*c < 255) (*c)++;
             }
     memcpy(shm->grid, shm->pgrid[cur_pat], sizeof shm->grid);
+    for (int tr = 0; tr < NTRACK; tr++) {
+        shm->ev_n[tr] = nev[cur_pat][tr];
+        for (int i = 0; i < nev[cur_pat][tr]; i++) {
+            Ev *e = &evs[cur_pat][tr][i];
+            uint8_t *o = shm->ev[tr][i];
+            o[0] = e->step; o[1] = e->note; o[2] = e->vel; o[3] = e->len;
+        }
+    }
     shm->cur_pat = cur_pat;
     shm->next_pat = next_pat;
     shm->song_mode = song_mode;
@@ -567,6 +580,44 @@ static void add_ev(int p, int tr, int st, int no, int ve, int le) {
     evs[p][tr][nev[p][tr]++] = e;
 }
 
+/* ---------- step editing ---------- */
+
+/* Removes events at `st` on track `tr` of pattern `p` whose note is `no`
+   (or every note if no < 0). Notes still being recorded on that track are
+   let go so their indices can't point at the wrong event. */
+static void del_ev(int p, int tr, int st, int no) {
+    int k = 0;
+    for (int i = 0; i < nev[p][tr]; i++) {
+        Ev *e = &evs[p][tr][i];
+        if (e->step == st && (no < 0 || e->note == no)) continue;
+        evs[p][tr][k++] = *e;
+    }
+    if (k != nev[p][tr]) {
+        nev[p][tr] = k;
+        for (int n = 0; n < 128; n++)
+            if (pend_p[tr][n] == p) pend[tr][n] = -1;
+    }
+}
+
+/* Writes one note at a step, replacing the same note at that step. */
+static void set_ev(int p, int tr, int st, int no, int ve, int le) {
+    del_ev(p, tr, st, no);
+    add_ev(p, tr, st, no, ve < 1 ? 1 : ve > 127 ? 127 : ve,
+           le < 1 ? 1 : le > NSTEP ? NSTEP : le);
+}
+
+/* Moves a track's notes by d steps, wrapping round (tr < 0: all tracks). */
+static void shift_ev(int p, int tr, int d) {
+    for (int t = 0; t < NTRACK; t++) {
+        if (tr >= 0 && t != tr) continue;
+        for (int i = 0; i < nev[p][t]; i++) {
+            Ev *e = &evs[p][t][i];
+            e->step = (uint8_t)(((e->step + d) % NSTEP + NSTEP) % NSTEP);
+            e->skip = 0;
+        }
+    }
+}
+
 /* Reads a song or pattern file. Lines it doesn't know are ignored, so the
    UI can keep its own settings in the same file. Old 5-field "ev" lines
    (from before pattern banks) go into pattern 1. */
@@ -651,6 +702,22 @@ static void handle_cmd(char *ln) {
         if (a != b) { memcpy(evs[b], evs[a], sizeof evs[a]); memcpy(nev[b], nev[a], sizeof nev[a]); }
     } else if (sscanf(ln, "clearpat %d", &a) == 1 && a >= 0 && a < NPAT) {
         memset(nev[a], 0, sizeof nev[a]);
+    } else if (!strncmp(ln, "stepset ", 8)) {
+        int p, st, no, ve, le;
+        if (sscanf(ln + 8, "%d %d %d %d %d %d", &p, &tr, &st, &no, &ve, &le) == 6
+            && p >= 0 && p < NPAT && tr >= 0 && tr < NTRACK && st >= 0
+            && st < NSTEP && no >= 0 && no < 128)
+            set_ev(p, tr, st, no, ve, le);
+    } else if (!strncmp(ln, "stepdel ", 8)) {
+        int p, st, no;
+        if (sscanf(ln + 8, "%d %d %d %d", &p, &tr, &st, &no) == 4 && p >= 0
+            && p < NPAT && tr >= 0 && tr < NTRACK && st >= 0 && st < NSTEP)
+            del_ev(p, tr, st, no);
+    } else if (!strncmp(ln, "shift ", 6)) {
+        int p, d;
+        if (sscanf(ln + 6, "%d %d %d", &p, &tr, &d) == 3 && p >= 0 && p < NPAT
+            && tr < NTRACK)
+            shift_ev(p, tr, d);
     } else if (!strncmp(ln, "new", 3)) {
         reset_song();
     } else if (sscanf(ln, "clear %d", &tr) == 1 && tr >= 0 && tr < NTRACK) {

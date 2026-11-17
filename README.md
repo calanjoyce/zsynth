@@ -6,6 +6,7 @@ library of songs and samples.
 
 ![Main screen](docs/drums.png) ![Song screen](docs/song.png)
 ![Files screen](docs/files.png)
+![Drum grid](docs/edit-drums.png) ![Step entry](docs/edit-roll.png)
 
 ## Features
 
@@ -21,6 +22,11 @@ library of songs and samples.
   hats, low and high toms, cowbell and crash.
 - **Sequencer**: a 16-step loop. Arm recording and play along; notes snap to
   16ths, note lengths are kept, and a metronome clicks while you record.
+- **Step editing**: the Edit screen turns the drum track into a classic drum
+  machine grid (10 drums × 16 steps, with accents). On the other tracks it
+  becomes a piano roll: play notes or chords and they're written into the
+  step under the cursor. You can also set note lengths, enter rests, delete
+  steps and shift a whole track left or right.
 - **Pattern banks**: 8 patterns per song. Switching while the loop plays
   waits until the end of the bar. You can copy and paste whole patterns.
 - **Song mode**: chain patterns (for example 1 1 2 3) and play them in order.
@@ -33,10 +39,12 @@ library of songs and samples.
 
 ## Screens
 
-`Tab` cycles through three screens:
+`Tab` cycles through four screens:
 
 - **Main**: play, record, the scope and sound settings, and the current
   pattern's step grid.
+- **Edit**: edit the current track of the current pattern step by step: a
+  drum grid for the drums, a piano roll for the others.
 - **Song**: the eight pattern slots, with a preview of each, and the chain.
 - **Files**: songs on the left, samples on the right.
 
@@ -52,7 +60,7 @@ F1–F10, `Fn`+`F` `Z` `X` `C` gives the arrow keys, and `Fn`+`H` gives Help.
 | `Space` | play / stop the loop |
 | `Enter` | record on/off: play while it loops |
 | `Backspace` | undo the last recorded note |
-| `Tab` | next screen: Main → Song → Files |
+| `Tab` | next screen: Main → Edit → Song → Files |
 | `Fn` + `H` | help |
 | `Fn` + `1`–`8` | choose a pattern (while playing, it switches at the end of the loop) |
 | `Fn` + `0` | song mode on/off |
@@ -69,6 +77,25 @@ F1–F10, `Fn`+`F` `Z` `X` `C` gives the arrow keys, and `Fn`+`H` gives Help.
 
 `Alt` works the same as `Ctrl`. On the drum track, each key plays one drum;
 the key map is shown on screen.
+
+**Edit screen, drums:** `F`/`X` pick a drum and `Z`/`C` pick a step (the
+arrows printed on those keys; `Fn` isn't needed here). `Enter` adds or
+removes a hit, `A` turns an accent on or off, and `Backspace` pressed twice
+clears that drum's row.
+
+**Edit screen, other tracks:** play a note key to write that note into the
+step under the cursor. The cursor then moves on by the note length. Hold
+several keys to write a chord, and play the same note on a step again to
+remove it. `Fn`+`Z`/`C` move the cursor, `Enter` skips a step (a rest),
+`Backspace` clears the step, and `-` / `=` (or `+`) make notes shorter or
+longer (also changing the notes already on the step). `Ctrl`+`Z`/`X` change
+the octave, as on the main screen.
+
+**Edit screen, both:** `[` / `]` shift the whole track one step left or
+right. The symbol keys (`[ ] - = +`) are typed the usual way on the
+Cardputer, through its symbol layer. `Space` plays and stops, so you can edit while the loop plays; the
+playhead shows on the grid. `Ctrl`+`1`–`4` switches track and `Fn`+`1`–`8`
+switches pattern, as everywhere.
 
 **Song screen:** `1`–`8` insert a pattern into the chain at the cursor,
 `Backspace` removes the one before the cursor, `Z`/`C` move the cursor, and
@@ -119,7 +146,8 @@ engine on the device, installs it to `/opt/zsynth`, and adds **ZSynth** to the
 launcher. Then restart the launcher.
 
 `test_ui.py` runs the app headless with simulated key presses, checks
-pattern banks, the chain, song mode and saving/opening songs, and saves
+pattern banks, the drum grid, step entry, the chain, song mode and
+saving/opening songs, and saves
 screenshots. Run it on the device with `python3 test_ui.py /tmp/zs`.
 
 ## Requirements
