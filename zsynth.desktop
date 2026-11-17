@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=ZSynth
+Exec=/opt/zsynth/zsynth.py
+Terminal=false
+Icon=share/images/zsynth.png
+Type=Application
