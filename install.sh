@@ -18,24 +18,8 @@ python3 make_icon.py /tmp/zsynth.png
 sudo install -m 644 /tmp/zsynth.png /usr/share/APPLaunch/share/images/zsynth.png
 sudo install -m 644 zsynth.desktop /usr/share/APPLaunch/applications/zsynth.desktop
 mkdir -p ~/.local/share/zsynth/samples
-# starter samples: add each one once (so one you delete stays deleted)
-LIB=~/.local/share/zsynth/samples
-for f in samples/*.wav; do
-    n=$(basename "$f")
-    grep -qxF "$n" $LIB/.starter 2>/dev/null && continue
-    [ -e "$LIB/$n" ] || cp "$f" "$LIB/$n"
-    echo "$n" >> $LIB/.starter
-done
-cp samples/CREDITS.md $LIB/.starter-credits.md
-# demo songs, also added once
-SL=~/.local/share/zsynth/songs
-mkdir -p $SL
-for f in songs/*.zsong; do
-    n=$(basename "$f")
-    grep -qxF "$n" $SL/.starter 2>/dev/null && continue
-    [ -e "$SL/$n" ] || cp "$f" "$SL/$n"
-    echo "$n" >> $SL/.starter
-done
+sudo rm -rf /opt/zsynth/samples /opt/zsynth/songs
+sudo cp -r samples songs /opt/zsynth/   # the app adds these to your library
 if pgrep -f "^[^ ]*python3 /opt/zsynth/zsynth.py" >/dev/null; then
     echo "installed (ZSynth is open: reopen it to get the new version)"
 else

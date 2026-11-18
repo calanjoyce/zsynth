@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Draw the 90x90 ZSynth launcher icon: piano keys under a waveform."""
+"""Draw the ZSynth icon: piano keys under a waveform.
+Usage: make_icon.py [out.png] [size]   (90 for the launcher, 256 for the store)"""
 import math
 import sys
 from PIL import Image, ImageDraw
@@ -25,5 +26,6 @@ for k in (0, 1, 3, 4, 5):
     d.rounded_rectangle(((cx - 2.6) * S, y0 * S, (cx + 2.6) * S,
                          (y0 + kh * 0.6) * S), radius=1 * S,
                         fill=(36, 30, 58, 255))
-im.resize((90, 90), Image.LANCZOS).save(sys.argv[1] if len(sys.argv) > 1
-                                        else "zsynth.png")
+size = int(sys.argv[2]) if len(sys.argv) > 2 else 90
+im.resize((size, size), Image.LANCZOS).save(sys.argv[1] if len(sys.argv) > 1
+                                            else "zsynth.png")

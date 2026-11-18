@@ -215,7 +215,23 @@ over SSH with passwordless `sudo`. From this folder on your computer, run:
 
 This copies the sources, installs `libpulse-dev` if needed, compiles the
 engine on the device, installs it to `/opt/zsynth`, and adds **ZSynth** to the
-launcher. Then restart the launcher.
+launcher. The first time ZSynth starts, it adds the starter samples, the demo
+song and the starter instruments to your library (once each, so ones you
+delete stay deleted).
+
+### Debian package (for the CardputerZero AppStore)
+
+```sh
+./package.sh user@cardputer-ip
+```
+
+builds `dist/zsynth_<version>_arm64.deb`. The engine is compiled on the
+Cardputer, so it's built for its arm64 processor. The package's name,
+version, summary, author and license come from `app-builder.json`, which also
+holds the store listing (icon and screenshots in `store/`). Install it with
+`sudo apt install ./zsynth_<version>_arm64.deb`, or publish it with
+[`czdev publish`](https://github.com/cardputerzero/AppBuilder) or the
+developer portal at [dev.cardputer.cc](https://dev.cardputer.cc).
 
 `test_ui.py` runs the app headless with simulated key presses, checks
 pattern banks, the drum grid, step entry, the chain, song mode and

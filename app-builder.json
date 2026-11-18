@@ -1,0 +1,34 @@
+{
+  "app_name": "ZSynth",
+  "package_name": "zsynth",
+  "version": "1.0.0",
+  "description": "A pocket groovebox for the Cardputer Zero",
+
+  "store": {
+    "summary": "Pocket groovebox: synths, mic sampler, drums, patterns and songs",
+    "description": "ZSynth turns the Cardputer Zero into a groovebox. Four tracks (lead synth, bass synth, sampler and drums) play eight patterns per song, each 1-32 steps in any time signature, chained into a song. Play notes live and record them into the loop, or write them step by step on a drum grid and a piano roll. Design sounds on the Sound screen and keep them in an instrument library that plays each one as you browse. Record samples with the built-in mic, or use the 18 starter samples (FM piano, marimba, kalimba, sax, gong and more, from the CC0 Versilian Community Sample Library). Comes with a demo song, night-shift.",
+    "categories": ["Media", "Creative & Office"],
+    "screenshots": [
+      "store/screenshots/1-main.png",
+      "store/screenshots/2-sound.png",
+      "store/screenshots/3-library.png",
+      "store/screenshots/4-drums.png",
+      "store/screenshots/5-song.png",
+      "store/screenshots/6-samples.png"
+    ],
+    "icon": "store/icon.png",
+    "license": "MIT",
+    "source_repo": "https://github.com/calanjoyce/zsynth",
+    "author": { "github": "calanjoyce", "display_name": "calanjoyce" },
+    "share_code": "ZSYN",
+    "permissions": {
+      "camera": false,
+      "microphone": true,
+      "imu": false,
+      "network": false,
+      "additional_hardware": false,
+      "background_service": false,
+      "external_display": false
+    }
+  }
+}

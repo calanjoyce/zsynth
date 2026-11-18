@@ -245,6 +245,7 @@ class App:
     def __init__(self):
         for d in (SAMPLES, SONGS):
             os.makedirs(d, exist_ok=True)
+        self.add_starters()
         new_library = not os.path.isdir(INSTR)
         for k in FACTORY:
             os.makedirs(os.path.join(INSTR, k), exist_ok=True)
@@ -492,6 +493,35 @@ class App:
         if not quiet:
             self.inst_mod[2] = bool(self.inst[2])
             self.flash(f"sample: {name}")
+
+    # ---- starter content shipped with the app (samples/, songs/) ----
+    def add_starters(self):
+        """Copy the starter samples and songs into the library, each one
+        once: a file you delete or rename isn't brought back."""
+        for src, dst, ext in ((os.path.join(HERE, "samples"), SAMPLES, ".wav"),
+                              (os.path.join(HERE, "songs"), SONGS, ".zsong")):
+            if not os.path.isdir(src):
+                continue
+            mark = os.path.join(dst, ".starter")
+            try:
+                with open(mark) as fh:
+                    had = set(fh.read().split())
+            except OSError:
+                had = set()
+            new = []
+            for name in sorted(os.listdir(src)):
+                if not name.endswith(ext) or name in had:
+                    continue
+                if not os.path.exists(os.path.join(dst, name)):
+                    try:
+                        shutil.copyfile(os.path.join(src, name),
+                                        os.path.join(dst, name))
+                    except OSError:
+                        continue
+                new.append(name)
+            if new:
+                with open(mark, "a") as fh:
+                    fh.write("\n".join(new) + "\n")
 
     # ---- instrument library ----
     def inst_path(self, kind, name):
@@ -1661,7 +1691,7 @@ class App:
                  "drums": "DRUM KITS"}[kind]
         pygame.draw.rect(self.s, col, (2, 33, 316, 13), border_radius=3)
         self.text(self.f_smb, title, BG, (W // 2, 39), "center")
-        rows = 8
+        rows = 7
         top = max(0, min(sel - rows // 2, len(items) - rows))
         orig_name = self.lib["orig"][1]
         for k, (kd, name) in enumerate(items[top:top + rows]):
@@ -1684,7 +1714,7 @@ class App:
                 self.text(self.f_sm, "on " + " ".join(users), DIM,
                           (314, y), "topright")
         self.text(self.f_sm, "S save your sound over it   R rename   "
-                  "U duplicate   D delete", DIM, (W // 2, 147), "midtop")
+                  "U duplicate   D delete", DIM, (W // 2, 136), "midtop")
         self.draw_footer("F/X browse (you hear each)  Enter use  P hear  "
                          "Esc undo")
 
@@ -1884,7 +1914,7 @@ class App:
         if not self.chain:
             self.text(self.f_sm, "press 1-8 to add patterns to the chain",
                       DIM, (W // 2, y0 + 24), "center")
-        self.draw_footer("1-8 add  Bksp del  Z/C move  Enter song mode  "
+        self.draw_footer("1-8 add  Bksp del  Z/C move  Enter song  "
                          "- = length  M meter")
 
     def draw_files(self, st):
