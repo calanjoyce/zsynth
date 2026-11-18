@@ -18,6 +18,7 @@ import os
 import re
 import signal
 import struct
+import shutil
 import subprocess
 import sys
 import time
@@ -49,6 +50,7 @@ K_CTRL, K_ALT = 29, 56
 K_1, K_2, K_3, K_4 = 2, 3, 4, 5
 K_Q, K_W, K_A, K_S, K_Z, K_X, K_C, K_V, K_F = 16, 17, 30, 31, 44, 45, 46, 47, 33
 K_B, K_N, K_R, K_L = 48, 49, 19, 38
+K_P, K_D, K_U = 25, 32, 22
 # Symbol layer: the Cardputer Zero sends keypad codes for the printed symbols
 # (see /usr/share/keymaps/tca8418_keypad_m5stack_keymap.map)
 K_MINUS, K_PLUS, K_EQUAL, K_LBRACE, K_RBRACE = 71, 72, 73, 74, 75
@@ -69,6 +71,13 @@ CHARS = dict(zip([16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34,
                  "qwertyuiopasdfghjklzxcvbnm"))
 CHARS.update({2 + i: "1234567890"[i] for i in range(10)})
 CHARS[57] = "-"
+
+# Actions in a sample's menu on the FILES screen: (id, label, shortcut key)
+SAMPLE_ACTIONS = [("play", "Play", K_P), ("load", "Use in sampler", K_L),
+                  ("rename", "Rename", K_R), ("dup", "Duplicate", K_U),
+                  ("delete", "Delete", K_D)]
+
+KEY_NAME = {K_P: "P", K_L: "L", K_R: "R", K_U: "U", K_D: "D"}
 
 SCREENS = ["MAIN", "EDIT", "SONG", "FILES"]
 S_MAIN, S_EDIT, S_SONG, S_FILES = range(4)
@@ -189,6 +198,8 @@ class App:
         self.msg, self.msg_t = "", 0
         self.confirm = None  # (action key, deadline)
         self.prompt = None  # dict(title, text, done)
+        self.menu = None    # sample action menu: dict(name, sel)
+        self.preview = None  # (Popen, sample name) while one is auditioned
         self.files_col = 0
         self.files_sel = [0, 0]
         self.pending_rec = None
@@ -381,6 +392,106 @@ class App:
         self.eng.send("sampload", os.path.join(SAMPLES, name))
         self.flash(f"sample: {name}")
 
+    # ---- sample library: audition, rename, duplicate, delete ----
+    def previewing(self):
+        """Name of the sample being auditioned, or None."""
+        if self.preview and self.preview[0].poll() is None:
+            return self.preview[1]
+        self.preview = None
+        return None
+
+    def stop_preview(self):
+        if self.previewing():
+            self.preview[0].terminate()
+            try:
+                self.preview[0].wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.preview[0].kill()
+        self.preview = None
+
+    def toggle_preview(self, name):
+        """Play a saved sample as recorded (not pitched, not through the
+        sampler's settings) without loading it; again to stop."""
+        was = self.previewing()
+        self.stop_preview()
+        if was == name:
+            return
+        try:
+            p = subprocess.Popen(["paplay", os.path.join(SAMPLES, name)],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        except OSError:
+            self.flash("can't play: paplay is missing")
+            return
+        self.preview = (p, name)
+
+    def unique_sample(self, base):
+        name, n = base + ".wav", 2
+        while os.path.exists(os.path.join(SAMPLES, name)):
+            name = f"{base}-{n}.wav"
+            n += 1
+        return name
+
+    def songs_using(self, name):
+        """Song files whose saved sample is `name`."""
+        out = []
+        for path in glob.glob(os.path.join(SONGS, "*.zsong")):
+            try:
+                with open(path) as fh:
+                    head = fh.read(512).splitlines()
+            except OSError:
+                continue
+            if f"sample {name}" in head[:3]:
+                out.append(path)
+        return out
+
+    def rename_sample(self, old, base):
+        new = old if slug(base) + ".wav" == old else \
+            self.unique_sample(slug(base))
+        if new == old:
+            return
+        if self.previewing() == old:
+            self.stop_preview()
+        os.rename(os.path.join(SAMPLES, old), os.path.join(SAMPLES, new))
+        # keep every song that uses it pointing at the new name
+        for path in self.songs_using(old):
+            with open(path) as fh:
+                lines = fh.read().split("\n")
+            for i, ln in enumerate(lines[:3]):
+                if ln == f"sample {old}":
+                    lines[i] = f"sample {new}"
+            with open(path + ".tmp", "w") as fh:
+                fh.write("\n".join(lines))
+            os.replace(path + ".tmp", path)
+        if self.sample_name == old:
+            self.sample_name = new
+        self.select_sample(new)
+        self.flash(f"renamed to {new[:-4]}")
+
+    def duplicate_sample(self, name):
+        new = self.unique_sample(name[:-4] + "-copy")
+        shutil.copyfile(os.path.join(SAMPLES, name), os.path.join(SAMPLES, new))
+        self.select_sample(new)
+        self.flash(f"copied to {new[:-4]}")
+
+    def delete_sample(self, name):
+        if self.previewing() == name:
+            self.stop_preview()
+        os.remove(os.path.join(SAMPLES, name))
+        if name == self.sample_name:
+            self.sample_name = ""
+            self.eng.send("sampclear")
+        n = len(self.songs_using(name))
+        self.flash(f"deleted {name[:-4]}" +
+                   (f" ({n} song{'s' * (n > 1)} used it)" if n else ""))
+        self.files_sel[1] = min(self.files_sel[1],
+                                max(0, len(self.sample_list()) - 1))
+
+    def select_sample(self, name):
+        names = self.sample_list()
+        if name in names:
+            self.files_sel[1] = names.index(name)
+
     def start_sample_rec(self):
         name = time.strftime("rec-%Y%m%d-%H%M%S.wav")
         self.pending_rec = name
@@ -488,6 +599,9 @@ class App:
         if self.prompt:
             if val == 1 or code == K_BKSP:
                 self.prompt_key(code)
+            return
+        if self.menu:
+            self.menu_key(code, val)
             return
         if self.help:
             if val == 1:
@@ -694,7 +808,9 @@ class App:
             elif kind == "song" and name != self.song:
                 self.load_song(name)
             elif kind == "sample":
-                self.load_sample(name)
+                self.menu = {"name": name, "sel": 0}
+        elif code == K_P and kind == "sample":
+            self.toggle_preview(name)
         elif code in (K_DEL, K_BKSP):
             if kind == "song":
                 if name == self.song:
@@ -703,14 +819,57 @@ class App:
                     os.remove(self.song_path(name))
                     self.flash(f"deleted {name}")
             elif kind == "sample":
-                if self.confirmed(("del", name), f"press again to delete {name}"):
-                    os.remove(os.path.join(SAMPLES, name))
-                    if name == self.sample_name:
-                        self.sample_name = ""
-                        self.eng.send("sampclear")
-                    self.flash(f"deleted {name}")
+                if self.confirmed(("del", name),
+                                  f"press again to delete {name[:-4]}"):
+                    self.delete_sample(name)
             self.files_sel[col] = min(self.files_sel[col],
                                       len(self.files_items(col)) - 1)
+
+    def menu_key(self, code, val):
+        m = self.menu
+        if code in (K_UP, K_F):
+            m["sel"] = (m["sel"] - 1) % len(SAMPLE_ACTIONS)
+            return
+        if code in (K_DOWN, K_X):
+            m["sel"] = (m["sel"] + 1) % len(SAMPLE_ACTIONS)
+            return
+        if val != 1:
+            return
+        if code == K_ESC:
+            self.menu = None
+            return
+        if code == K_ENTER:
+            self.sample_action(SAMPLE_ACTIONS[m["sel"]][0])
+            return
+        for i, (act, _, k) in enumerate(SAMPLE_ACTIONS):
+            if code == k:
+                m["sel"] = i
+                self.sample_action(act)
+                return
+
+    def sample_action(self, act):
+        name = self.menu["name"]
+        if not os.path.exists(os.path.join(SAMPLES, name)):
+            self.menu = None
+            return
+        if act == "play":                       # menu stays open
+            self.toggle_preview(name)
+        elif act == "load":
+            self.menu = None
+            self.load_sample(name)
+            self.track = 2
+        elif act == "rename":
+            self.menu = None
+            self.ask_name("Rename sample",
+                          lambda base: self.rename_sample(name, base),
+                          text=name[:-4])
+        elif act == "dup":
+            self.menu = None
+            self.duplicate_sample(name)
+        elif act == "delete":
+            if self.confirmed(("del", name), "press again to delete it"):
+                self.menu = None
+                self.delete_sample(name)
 
     def files_items(self, col):
         if col == 0:
@@ -718,8 +877,8 @@ class App:
                     [("song", n) for n in self.song_list()])
         return [("sample", n) for n in self.sample_list()]
 
-    def ask_name(self, title, done):
-        self.prompt = {"title": title, "text": "", "done": done}
+    def ask_name(self, title, done, text=""):
+        self.prompt = {"title": title, "text": text, "done": done}
 
     def prompt_key(self, code):
         p = self.prompt
@@ -1176,9 +1335,11 @@ class App:
                          TEXT if current else
                          (TEXT if active and i == sel else DIM))
                 label = name[:-4] if kind == "sample" else name
+                playing = kind == "sample" and name == self.previewing()
+                mark = "▶ " if playing else ("● " if current else "  ")
                 self.text(self.f_smb if current else self.f_sm,
-                          ("● " if current else "  ") + label[:22], col_t,
-                          (x0 + 3, y - 1))
+                          mark + label[:22],
+                          TRACKS[2][2] if playing else col_t, (x0 + 3, y - 1))
                 if kind == "sample":
                     ln = self.wav_len(name)
                     if ln:
@@ -1187,8 +1348,48 @@ class App:
             if not items:
                 self.text(self.f_sm, "none yet: Ctrl+R records one", DIM,
                           (x0 + 78, 70), "center")
-        self.draw_footer("F/X up/down  Z/C column  Enter open  S save  "
-                         "Del delete")
+        if self.menu:
+            self.draw_menu()
+        elif self.files_col == 1:
+            self.draw_footer("F/X up/down  Z/C column  Enter actions  "
+                             "P play  Del delete")
+        else:
+            self.draw_footer("F/X up/down  Z/C column  Enter open  S save  "
+                             "Del delete")
+
+    def draw_menu(self):
+        """Action menu for one sample, over the SONGS column so the sample
+        list stays visible."""
+        name = self.menu["name"]
+        x0, y0, w = 2, 34, 156
+        h = 26 + 13 * len(SAMPLE_ACTIONS)
+        col = TRACKS[2][2]
+        pygame.draw.rect(self.s, (0, 0, 0), (x0, y0, w, h), border_radius=5)
+        pygame.draw.rect(self.s, col, (x0, y0, w, h), 1, border_radius=5)
+        self.text(self.f_smb, name[:-4][:24], TEXT, (x0 + 6, y0 + 3))
+        ln = self.wav_len(name)
+        users = len(self.songs_using(name))
+        info = (f"{ln:.1f}s" if ln else "?") + \
+            (f" · in {users} song{'s' * (users > 1)}" if users else "")
+        self.text(self.f_sm, info, DIM, (x0 + 6, y0 + 14))
+        playing = self.previewing() == name
+        for i, (act, label, k) in enumerate(SAMPLE_ACTIONS):
+            y = y0 + 26 + i * 13
+            sel = i == self.menu["sel"]
+            if sel:
+                pygame.draw.rect(self.s, PANEL, (x0 + 3, y - 1, w - 6, 13),
+                                 border_radius=2)
+                pygame.draw.rect(self.s, col, (x0 + 3, y - 1, 2, 13))
+            if act == "play" and playing:
+                label = "Stop"
+            if act == "load" and name == self.sample_name:
+                label = "In the sampler now"
+            self.text(self.f_smb if sel else self.f_sm, label,
+                      TEXT if sel else DIM, (x0 + 10, y))
+            self.text(self.f_sm, KEY_NAME[k], DIM, (x0 + w - 8, y),
+                      "topright")
+        self.draw_footer("F/X pick  Enter do it  or press the letter  "
+                         "Esc close")
 
     def draw_prompt(self):
         p = self.prompt
@@ -1263,6 +1464,7 @@ class App:
                 self.render()
                 nxt = now + frame
             time.sleep(0.004)
+        self.stop_preview()
         self.save_song()
         self.eng.close()
         self.s.fill((0, 0, 0))

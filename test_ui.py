@@ -237,6 +237,66 @@ time.sleep(0.3)
 check("song's sample loads after reopening",
       not migrated or st()["sample_len"] > 0)
 snap("sample")
+
+# sample action menu: Enter on a sample opens it
+import wave  # noqa: E402
+samples = os.path.join(data, "samples")
+with wave.open(os.path.join(samples, "rec-test.wav"), "wb") as w:
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(48000)
+    w.writeframes(b"\0\0" * 24000)          # 0.5 s of silence
+app.sample_name = "rec-test.wav"             # the open song uses it
+app.save_song()
+key(TAB)
+key(TAB)
+key(TAB)                                     # back round to FILES
+app.files_col = 1
+app.select_sample("rec-test.wav")
+key(ENTER)
+check("Enter on a sample opens its menu",
+      app.menu and app.menu["name"] == "rec-test.wav")
+key(25)                                      # P: play
+check("P plays it", app.previewing() == "rec-test.wav")
+snap("sample-menu")
+key(25)
+check("P again stops it", app.previewing() is None)
+key(22)                                      # U: duplicate
+check("duplicate makes rec-test-copy",
+      os.path.exists(os.path.join(samples, "rec-test-copy.wav")) and
+      app.menu is None)
+app.select_sample("rec-test.wav")
+key(ENTER)
+key(19)                                      # R: rename, name is prefilled
+check("rename prompt starts with the old name",
+      app.prompt and app.prompt["text"] == "rec-test")
+for _ in range(4):
+    key(BKSP)
+for c in (34, 19, 23, 25):                   # g r i p  -> "rec-grip"
+    key(c)
+key(ENTER)
+song_txt = open(os.path.join(data, "songs", app.song + ".zsong")).read()
+check("rename moves the file and the song follows",
+      os.path.exists(os.path.join(samples, "rec-grip.wav")) and
+      not os.path.exists(os.path.join(samples, "rec-test.wav")) and
+      app.sample_name == "rec-grip.wav" and "sample rec-grip.wav" in song_txt)
+app.select_sample("rec-test-copy.wav")
+key(ENTER)
+key(38)                                      # L: use in sampler
+check("L loads it into the sampler",
+      app.sample_name == "rec-test-copy.wav" and app.track == 2)
+app.select_sample("rec-test-copy.wav")
+key(ENTER)
+key(32)                                      # D: first press only warns
+check("first D only warns",
+      os.path.exists(os.path.join(samples, "rec-test-copy.wav")))
+key(32)
+check("second D deletes and unloads it",
+      not os.path.exists(os.path.join(samples, "rec-test-copy.wav")) and
+      app.sample_name == "" and app.menu is None)
+key(ENTER)
+key(1)                                       # Esc closes the menu
+check("Esc closes the menu", app.menu is None and app.screen == 3)
 time.sleep(0.2)
 app.running = False
 app.save_song()

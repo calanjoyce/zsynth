@@ -32,8 +32,9 @@ library of songs and samples.
 - **Song mode**: chain patterns (for example 1 1 2 3) and play them in order.
 - **Songs**: save, save as, new, open and delete named songs. A song keeps its
   patterns, chain, tempo, sound settings and which sample it uses.
-- **Sample library**: every mic recording is saved as its own WAV. Load any
-  of them into the sampler, or delete the ones you don't want.
+- **Sample library**: every mic recording is saved as its own WAV. Each
+  sample has a menu to play it, put it in the sampler, rename it (songs that
+  use it follow the new name), duplicate it or delete it.
 - **Live scope**, step grid and settings on the 320×170 screen.
 - The open song is saved automatically when you quit or switch songs.
 
@@ -102,9 +103,23 @@ switches pattern, as everywhere.
 `Enter` turns song mode on or off.
 
 **Files screen:** `F`/`X` move up and down, `Z`/`C` switch between Songs and
-Samples, `Enter` opens a song or loads a sample (or runs *new song* /
-*save as…*, which ask for a name), `S` saves the open song, and
-`Backspace`/`Del` pressed twice deletes the selected file.
+Samples, `Enter` opens a song (or runs *new song* / *save as…*, which ask for
+a name), `S` saves the open song, and `Backspace`/`Del` pressed twice deletes
+the selected file. In the Samples column, `P` plays the selected sample as
+recorded (press again to stop) and `Enter` opens its menu:
+
+![Sample menu](docs/sample-menu.png)
+
+| Key | Action |
+| --- | --- |
+| `P` | play / stop, without loading it |
+| `L` | use it in the sampler track |
+| `R` | rename it: every song that uses it is updated |
+| `U` | duplicate it (as *name*-copy) |
+| `D` | delete it (press twice) |
+
+`F`/`X` and `Enter` work too, and `Esc` closes the menu. The menu shows the
+sample's length and how many songs use it.
 
 ## How it works
 
