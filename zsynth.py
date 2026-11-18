@@ -37,6 +37,7 @@ KBD = os.environ.get(
 DATA = os.path.expanduser("~/.local/share/zsynth")
 SAMPLES = os.path.join(DATA, "samples")
 SONGS = os.path.join(DATA, "songs")
+INSTR = os.path.join(DATA, "instruments")   # instruments/<kind>/<name>.zinst
 STATE = os.path.join(DATA, "state.json")
 LEGACY_PATTERN = os.path.join(DATA, "pattern.txt")
 LEGACY_SAMPLE = os.path.join(DATA, "sample.wav")
@@ -79,8 +80,8 @@ SAMPLE_ACTIONS = [("play", "Play", K_P), ("load", "Use in sampler", K_L),
 
 KEY_NAME = {K_P: "P", K_L: "L", K_R: "R", K_U: "U", K_D: "D"}
 
-SCREENS = ["MAIN", "EDIT", "SONG", "FILES"]
-S_MAIN, S_EDIT, S_SONG, S_FILES = range(4)
+SCREENS = ["MAIN", "EDIT", "SOUND", "SONG", "FILES"]
+S_MAIN, S_EDIT, S_SOUND, S_SONG, S_FILES = range(5)
 
 # Step editor. Arrows: Fn+F/Z/X/C everywhere; on the drum grid plain
 # F/Z/X/C too (the letters aren't notes there).
@@ -127,6 +128,55 @@ DEFAULTS = [
     {1: 12000, 4: 1.0, 9: 0.8},
 ]
 DEFAULT_OCT = [4, 2, 4, 3]
+
+# ---- instrument library ----
+# Lead and bass share the synth, so their instruments are interchangeable.
+KIND = ["synth", "synth", "sampler", "drums"]
+FACTORY = {
+    "synth": {
+        "saw-lead": DEFAULTS[0],
+        "square-bass": DEFAULTS[1],
+        "pluck": {0: 2, 1: 1800, 2: 0.4, 3: 1, 4: 180, 5: 0, 6: 120, 7: 0.8,
+                  8: 4, 9: 0.6},
+        "soft-pad": {0: 1, 1: 1500, 2: 0.2, 3: 600, 4: 1200, 5: 0.8,
+                     6: 1500, 7: 0.2, 8: 12, 9: 0.45},
+        "bell": {0: 0, 1: 6000, 2: 0.1, 3: 1, 4: 900, 5: 0, 6: 900, 7: 0.3,
+                 8: 3, 9: 0.5},
+        "organ": {0: 1, 1: 4000, 2: 0.1, 3: 5, 4: 100, 5: 1.0, 6: 60, 7: 0,
+                  8: 2, 9: 0.5},
+        "acid-bass": {0: 2, 1: 350, 2: 0.85, 3: 1, 4: 180, 5: 0.2, 6: 60,
+                      7: 0.9, 8: 0, 9: 0.6},
+        "sub-bass": {0: 0, 1: 800, 2: 0, 3: 3, 4: 400, 5: 0.9, 6: 80, 7: 0,
+                     8: 0, 9: 0.8},
+    },
+    "sampler": {
+        "one-shot": DEFAULTS[2],
+        "soft-gate": {0: 1, 1: 5000, 2: 0.2, 3: 30, 6: 400, 9: 0.8},
+        "fm-piano": {0: 1, 1: 7000, 2: 0.1, 3: 2, 6: 180, 9: 0.7},
+        "harpsichord": {0: 0, 1: 12000, 2: 0, 3: 1, 6: 200, 9: 0.7},
+        "marimba": {0: 0, 1: 9000, 2: 0, 3: 1, 6: 200, 9: 0.8},
+        "kalimba": {0: 0, 1: 9000, 2: 0.1, 3: 1, 6: 300, 9: 0.8},
+        "glockenspiel": {0: 0, 1: 12000, 2: 0, 3: 1, 6: 400, 9: 0.6},
+        "tenor-sax": {0: 1, 1: 6000, 2: 0.1, 3: 15, 6: 120, 9: 0.75},
+        "sax-stab": {0: 0, 1: 8000, 2: 0.1, 3: 1, 6: 80, 9: 0.8},
+        "harmonica": {0: 1, 1: 8000, 2: 0, 3: 20, 6: 150, 9: 0.7},
+    },
+    "drums": {
+        "kit": DEFAULTS[3],
+        "tight-kit": {1: 9000, 4: 0.6, 9: 0.8},
+        "boomy-kit": {1: 3000, 4: 2.2, 9: 0.85},
+    },
+}
+FACTORY["synth"].update({
+    "disco-bass": {0: 2, 1: 650, 2: 0.5, 3: 1, 4: 140, 5: 0.25, 6: 60,
+                   7: 0.75, 8: 6, 9: 0.75},
+    "night-lead": {0: 2, 1: 1800, 2: 0.5, 3: 2, 4: 200, 5: 0.4, 6: 150,
+                   7: 0.6, 8: 12, 9: 0.4},
+})
+# sampler instruments that come with a starter sample (see samples/)
+FACTORY_SAMPLE = {n: n + ".wav" for n in FACTORY["sampler"]
+                  if n not in ("one-shot", "soft-gate")}
+DEFAULT_INST = ["saw-lead", "square-bass", "one-shot", "kit"]
 
 BG = (10, 12, 16)
 PANEL = (24, 28, 36)
@@ -175,6 +225,9 @@ class App:
     def __init__(self):
         for d in (SAMPLES, SONGS):
             os.makedirs(d, exist_ok=True)
+        new_library = not os.path.isdir(INSTR)
+        for k in FACTORY:
+            os.makedirs(os.path.join(INSTR, k), exist_ok=True)
         pygame.font.init()
         self.s = pygame.Surface((W, H))
         self.f_sm = font("DejaVuSansCondensed.ttf", 10)
@@ -200,6 +253,10 @@ class App:
         self.prompt = None  # dict(title, text, done)
         self.menu = None    # sample action menu: dict(name, sel)
         self.preview = None  # (Popen, sample name) while one is auditioned
+        self.inst = list(DEFAULT_INST)   # instrument name per track ("" = custom)
+        self.inst_mod = [False] * 4      # changed since loaded / saved
+        self.lib = None     # library browser: dict(sel, orig)
+        self.later = []     # [(time, engine command...)] for preview notes
         self.files_col = 0
         self.files_sel = [0, 0]
         self.pending_rec = None
@@ -225,6 +282,9 @@ class App:
                 pass
             time.sleep(0.05)
 
+        self.add_factory()
+        if new_library:
+            self.make_library()
         self.startup()
 
         self.fb = os.open(FB, os.O_RDWR)
@@ -258,6 +318,7 @@ class App:
                 for k, v in d.items():
                     self.vals[t][int(k)] = float(v)
             self.octave = st.get("octave", self.octave)
+            self.name_insts({})
             if os.path.exists(LEGACY_SAMPLE):
                 dst = os.path.join(SAMPLES, "first-sample.wav")
                 if not os.path.exists(dst):
@@ -288,6 +349,7 @@ class App:
         self.vals = [dict(d) for d in DEFAULTS]
         self.octave = list(DEFAULT_OCT)
         self.chain, self.chain_cur = [], 0
+        self.inst, self.inst_mod = list(DEFAULT_INST), [False] * 4
         self.song = name
         self.apply_sound()
         if save:
@@ -313,6 +375,8 @@ class App:
             return False
         lines = ["zsong 1", f"sample {self.sample_name}"]
         lines += [f"octave {t} {o}" for t, o in enumerate(self.octave)]
+        lines += [f"inst {t} {self.inst[t] or '-'} {int(self.inst_mod[t])}"
+                  for t in range(4)]
         for t in range(4):
             for k, v in sorted(self.vals[t].items()):
                 lines.append(f"param {t} {k} {v:g}")
@@ -332,6 +396,7 @@ class App:
         octave = list(DEFAULT_OCT)
         sample = ""
         chain = []
+        inst = {}
         try:
             with open(path) as fh:
                 for ln in fh:
@@ -344,6 +409,9 @@ class App:
                         octave[int(p[1]) % 4] = int(p[2])
                     elif p[0] == "param" and len(p) == 4:
                         vals[int(p[1]) % 4][int(p[2])] = float(p[3])
+                    elif p[0] == "inst" and len(p) == 4:
+                        inst[int(p[1]) % 4] = ("" if p[2] == "-" else p[2],
+                                               p[3] == "1")
                     elif p[0] == "chain":
                         chain = [int(x) for x in p[1:] if x.isdigit()]
         except (OSError, ValueError):
@@ -351,12 +419,23 @@ class App:
             return
         self.vals, self.octave, self.sample_name = vals, octave, sample
         self.chain, self.chain_cur = chain, len(chain)
+        self.name_insts(inst)
         self.song = name
         self.eng.send("stop")
         self.eng.send("load", path)
         self.apply_sound()
         self.save_state()
         self.flash(f"opened {name}")
+
+    def name_insts(self, saved):
+        """Instrument names for a song just read: the ones it saved, or
+        (older songs) whichever library instrument sounds the same."""
+        for t in range(4):
+            if t in saved:
+                self.inst[t], self.inst_mod[t] = saved[t]
+            else:
+                self.inst[t], self.inst_mod[t] = \
+                    self.match_inst(t, self.vals[t]), False
 
     def save_state(self):
         try:
@@ -387,10 +466,160 @@ class App:
                 self.wav_info[key] = None
         return self.wav_info[key]
 
-    def load_sample(self, name):
+    def load_sample(self, name, quiet=False):
         self.sample_name = name
         self.eng.send("sampload", os.path.join(SAMPLES, name))
-        self.flash(f"sample: {name}")
+        if not quiet:
+            self.inst_mod[2] = bool(self.inst[2])
+            self.flash(f"sample: {name}")
+
+    # ---- instrument library ----
+    def inst_path(self, kind, name):
+        return os.path.join(INSTR, kind, name + ".zinst")
+
+    def inst_list(self, kind):
+        return sorted(os.path.basename(p)[:-6] for p in
+                      glob.glob(os.path.join(INSTR, kind, "*.zinst")))
+
+    def read_inst(self, kind, name):
+        """(values, sample name) of a library instrument, or None."""
+        vals, sample = {}, ""
+        try:
+            with open(self.inst_path(kind, name)) as fh:
+                for ln in fh:
+                    p = ln.split()
+                    if len(p) == 3 and p[0] == "param":
+                        vals[int(p[1])] = float(p[2])
+                    elif p and p[0] == "sample":
+                        sample = " ".join(p[1:])
+        except (OSError, ValueError):
+            return None
+        return vals, sample
+
+    def write_inst(self, kind, name, vals, sample=""):
+        lines = ["zinst 1", f"kind {kind}"]
+        lines += [f"param {k} {v:g}" for k, v in sorted(vals.items())]
+        if sample:
+            lines.append(f"sample {sample}")
+        path = self.inst_path(kind, name)
+        with open(path + ".tmp", "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        os.replace(path + ".tmp", path)
+
+    def track_vals(self, t, vals):
+        """vals limited to (and completed with) the settings track t has."""
+        return {p[1]: float(vals.get(p[1], DEFAULTS[t].get(p[1], p[3])))
+                for p in PARAMS[t]}
+
+    def same_sound(self, t, a, b):
+        a, b = self.track_vals(t, a), self.track_vals(t, b)
+        return all(abs(a[k] - b[k]) <= 1e-3 * max(1, abs(b[k])) for k in a)
+
+    def match_inst(self, t, vals):
+        """Name of a library instrument that sounds like vals, or ""."""
+        for name in self.inst_list(KIND[t]):
+            got = self.read_inst(KIND[t], name)
+            if got and self.same_sound(t, vals, got[0]):
+                return name
+        return ""
+
+    def add_factory(self):
+        """Add starter instruments this library hasn't had yet. Each is
+        added once, so one you delete or rename stays that way."""
+        mark = os.path.join(INSTR, ".factory")
+        try:
+            with open(mark) as fh:
+                had = set(fh.read().split())
+        except OSError:
+            had = set()
+        new = []
+        for kind, insts in FACTORY.items():
+            for name, vals in insts.items():
+                key = f"{kind}/{name}"
+                if key in had:
+                    continue
+                if not os.path.exists(self.inst_path(kind, name)):
+                    self.write_inst(kind, name, vals,
+                                    FACTORY_SAMPLE.get(name, "")
+                                    if kind == "sampler" else "")
+                new.append(key)
+        if new:
+            with open(mark, "a") as fh:
+                fh.write("\n".join(new) + "\n")
+
+    def make_library(self):
+        """First run: your songs' custom sounds become instruments."""
+        for song in self.song_list():
+            vals = [dict(d) for d in DEFAULTS]
+            sample = ""
+            try:
+                with open(self.song_path(song)) as fh:
+                    for ln in fh:
+                        p = ln.split()
+                        if len(p) == 4 and p[0] == "param":
+                            vals[int(p[1]) % 4][int(p[2])] = float(p[3])
+                        elif p and p[0] == "sample":
+                            sample = " ".join(p[1:])
+                        elif p and p[0] == "ev":
+                            break
+            except (OSError, ValueError):
+                continue
+            for t in range(4):
+                if not self.match_inst(t, vals[t]):
+                    self.write_inst(KIND[t], slug(f"{song}-{TRACKS[t][0]}"),
+                                    self.track_vals(t, vals[t]),
+                                    sample if t == 2 else "")
+
+    def use_inst(self, t, name, audition=False):
+        """Put library instrument `name` on track t. With audition, only
+        the sound changes (the library browser undoes it on Esc)."""
+        got = self.read_inst(KIND[t], name)
+        if not got:
+            self.flash(f"can't read {name}")
+            return
+        vals, sample = got
+        self.vals[t] = self.track_vals(t, vals)
+        for p in PARAMS[t]:
+            self.push(t, p[1])
+        if t == 2 and sample and sample != self.sample_name and \
+                os.path.exists(os.path.join(SAMPLES, sample)):
+            self.load_sample(sample, quiet=True)
+        if not audition:
+            self.inst[t], self.inst_mod[t] = name, False
+
+    def save_inst(self, t, name):
+        self.write_inst(KIND[t], name, self.track_vals(t, self.vals[t]),
+                        self.sample_name if t == 2 else "")
+        self.inst[t], self.inst_mod[t] = name, False
+        self.flash(f"saved instrument {name}")
+
+    def unique_inst(self, kind, base):
+        name, n = base, 2
+        while os.path.exists(self.inst_path(kind, name)):
+            name = f"{base}-{n}"
+            n += 1
+        return name
+
+    def preview_note(self):
+        """A short phrase on the current track, to hear its sound."""
+        t, now = self.track, time.time()
+        if t == 3:      # kick, snare, hat
+            for i, semi in enumerate((0, 2, 4)):
+                n = self.note_for(3, semi)
+                self.later.append((now + 0.18 * i, "on", 3, n, 110))
+                self.later.append((now + 0.18 * i + 0.1, "off", 3, n))
+        else:
+            n = self.note_for(t, 0)
+            self.eng.send("on", t, n, 110)
+            self.later.append((now + 0.45, "off", t, n))
+
+    def run_later(self):
+        now = time.time()
+        due = [c for c in self.later if c[0] <= now]
+        if due:
+            self.later = [c for c in self.later if c[0] > now]
+            for c in due:
+                self.eng.send(*c[1:])
 
     # ---- sample library: audition, rename, duplicate, delete ----
     def previewing(self):
@@ -617,6 +846,9 @@ class App:
             elif n == 9:
                 self.toggle_song_mode()
             return
+        if self.lib:
+            self.lib_key(code, val)
+            return
         if self.mod:
             self.command(code, val)
             return
@@ -633,6 +865,8 @@ class App:
             self.main_key(code, val)
         elif self.screen == S_EDIT:
             self.edit_key(code, val)
+        elif self.screen == S_SOUND:
+            self.sound_key(code, val)
         elif self.screen == S_SONG:
             self.song_key(code, val)
         else:
@@ -912,21 +1146,173 @@ class App:
         if self.save_song(name):
             self.flash(f"saved as {name}")
 
-    def command(self, code, val):
+    def pick(self, d):
+        t = self.track
+        self.sel[t] = (self.sel[t] + d) % len(PARAMS[t])
+
+    def adjust(self, up):
         t = self.track
         plist = PARAMS[t]
-        if code in (K_A, K_S):  # allow auto-repeat
-            label, idx, kind, lo, hi = plist[self.sel[t] % len(plist)]
-            v = self.vals[t].get(idx, lo)
-            up = code == K_S
-            if isinstance(kind, list):
-                v = (int(v) + (1 if up else -1)) % len(kind)
-            elif kind in ("log", "ms"):
-                v = min(hi, max(lo, v * (1.12 if up else 1 / 1.12)))
+        label, idx, kind, lo, hi = plist[self.sel[t] % len(plist)]
+        v = self.vals[t].get(idx, lo)
+        if isinstance(kind, list):
+            v = (int(v) + (1 if up else -1)) % len(kind)
+        elif kind in ("log", "ms"):
+            v = min(hi, max(lo, v * (1.12 if up else 1 / 1.12)))
+        else:
+            v = min(hi, max(lo, v + (hi - lo) * (0.025 if up else -0.025)))
+        self.vals[t][idx] = v
+        self.inst_mod[t] = True
+        self.push(t, idx)
+
+    # ================= sound screen and instrument library =================
+    def sound_key(self, code, val):
+        if code in (K_UP, K_DOWN):              # Fn+F/X: pick a setting
+            self.pick(1 if code == K_DOWN else -1)
+            return
+        if code in (K_LEFT, K_RIGHT):           # Fn+Z/C: change it (repeats)
+            self.adjust(code == K_RIGHT)
+            return
+        if val != 1:
+            return
+        if code == K_ENTER:
+            self.open_library()
+        elif code == K_ESC:
+            self.screen = S_MAIN
+        elif code in NOTE_KEYS:                 # play to hear the sound
+            self.main_key(code, val)
+
+    def lib_items(self):
+        return [("saveas", "+ save this sound as...")] + \
+            [("inst", n) for n in self.inst_list(KIND[self.track])]
+
+    def open_library(self):
+        t = self.track
+        items = self.lib_items()
+        names = [n for _, n in items]
+        self.lib = {"sel": names.index(self.inst[t]) if self.inst[t] in names
+                    else 0,
+                    "orig": (dict(self.vals[t]), self.inst[t],
+                             self.inst_mod[t], self.sample_name)}
+
+    def close_library(self, keep):
+        t = self.track
+        if not keep:                            # undo the auditioning
+            vals, name, mod, sample = self.lib["orig"]
+            self.vals[t] = vals
+            for p in PARAMS[t]:
+                self.push(t, p[1])
+            if t == 2 and sample != self.sample_name:
+                if sample:
+                    self.load_sample(sample, quiet=True)
+                else:
+                    self.sample_name = ""
+                    self.eng.send("sampclear")
+            self.inst[t], self.inst_mod[t] = name, mod
+        self.lib = None
+
+    def lib_audition(self):
+        kind, name = self.lib_items()[self.lib["sel"]]
+        if kind == "inst":
+            self.use_inst(self.track, name, audition=True)
+            self.preview_note()
+        else:                                   # back to the sound you had
+            vals, _, _, sample = self.lib["orig"]
+            t = self.track
+            self.vals[t] = dict(vals)
+            for p in PARAMS[t]:
+                self.push(t, p[1])
+
+    def lib_key(self, code, val):
+        items = self.lib_items()
+        sel = min(self.lib["sel"], len(items) - 1)
+        if code in (K_UP, K_F, K_DOWN, K_X):
+            d = -1 if code in (K_UP, K_F) else 1
+            self.lib["sel"] = max(0, min(len(items) - 1, sel + d))
+            if self.lib["sel"] != sel:
+                self.lib_audition()
+            return
+        if val != 1 or self.mod:
+            return
+        kind, name = items[sel]
+        t = self.track
+        if code == K_ESC:
+            self.close_library(keep=False)
+        elif code == K_SPACE:
+            st = self.status()
+            self.eng.send("stop" if st and st["playing"] else "play")
+        elif code == K_P and kind == "inst":
+            self.preview_note()
+        elif code == K_ENTER:
+            if kind == "saveas":
+                self.close_library(keep=False)
+                self.ask_name("Save instrument as",
+                              lambda n: self.save_inst(
+                                  t, self.unique_inst(KIND[t], n)),
+                              text=self.inst[t])
             else:
-                v = min(hi, max(lo, v + (hi - lo) * (0.025 if up else -0.025)))
-            self.vals[t][idx] = v
-            self.push(t, idx)
+                self.close_library(keep=True)
+                self.use_inst(t, name)
+                self.flash(f"{TRACKS[t][0].lower()}: {name}")
+        elif kind != "inst":
+            return
+        elif code == K_S:                       # your sound -> this instrument
+            if self.confirmed(("instsave", name),
+                              f"press again to save your sound as {name}"):
+                vals, _, _, sample = self.lib["orig"]
+                self.close_library(keep=False)
+                self.write_inst(KIND[t], name, self.track_vals(t, vals),
+                                sample if t == 2 else "")
+                self.inst[t], self.inst_mod[t] = name, False
+                self.flash(f"saved instrument {name}")
+        elif code == K_R:
+            self.close_library(keep=False)
+            self.ask_name("Rename instrument",
+                          lambda n: self.rename_inst(t, name, n), text=name)
+        elif code == K_U:
+            new = self.unique_inst(KIND[t], name + "-copy")
+            shutil.copyfile(self.inst_path(KIND[t], name),
+                            self.inst_path(KIND[t], new))
+            self.lib_select(new)
+            self.flash(f"copied to {new}")
+        elif code == K_D:
+            if self.confirmed(("instdel", name), f"press again to delete {name}"):
+                os.remove(self.inst_path(KIND[t], name))
+                for k in range(4):       # songs keep their copy of the sound
+                    if KIND[k] == KIND[t] and self.inst[k] == name:
+                        self.inst_mod[k] = True
+                if self.lib["orig"][1] == name:
+                    o = self.lib["orig"]
+                    self.lib["orig"] = (o[0], o[1], True, o[3])
+                self.lib["sel"] = min(sel, len(self.lib_items()) - 1)
+                self.flash(f"deleted {name}")
+
+    def lib_select(self, name):
+        names = [n for _, n in self.lib_items()]
+        if self.lib and name in names:
+            self.lib["sel"] = names.index(name)
+
+    def rename_inst(self, t, old, new):
+        new = slug(new)
+        if new == old:
+            return
+        new = self.unique_inst(KIND[t], new)
+        os.rename(self.inst_path(KIND[t], old), self.inst_path(KIND[t], new))
+        for k in range(4):
+            if KIND[k] == KIND[t] and self.inst[k] == old:
+                self.inst[k] = new
+        self.open_library()
+        self.lib_select(new)
+        self.flash(f"renamed to {new}")
+
+    def command(self, code, val):
+        t = self.track
+        if code in (K_A, K_S, K_Q, K_W) and self.screen != S_SOUND:
+            if val == 1:
+                self.flash("sound settings are on the SOUND screen (Tab)")
+            return
+        if code in (K_A, K_S):  # allow auto-repeat
+            self.adjust(code == K_S)
             return
         if code in (K_B, K_N):
             st = self.status()
@@ -939,7 +1325,7 @@ class App:
         if code in (K_1, K_2, K_3, K_4):
             self.track = code - K_1
         elif code in (K_Q, K_W):
-            self.sel[t] = (self.sel[t] + (1 if code == K_W else -1)) % len(plist)
+            self.pick(1 if code == K_W else -1)
         elif code in (K_Z, K_X) and t != 3:
             self.octave[t] = max(0, min(7, self.octave[t] +
                                         (1 if code == K_X else -1)))
@@ -1035,13 +1421,13 @@ class App:
         self.text(self.f_mid, f"{self.bpm}", TEXT, (W - 22, 8), "midright")
         self.text(self.f_sm, "bpm", DIM, (W - 2, 9), "midright")
 
-    def draw_scope(self, st, rect):
+    def draw_scope(self, st, rect, octave=True):
         x0, y0, w, h = rect
         pygame.draw.rect(self.s, PANEL, rect, border_radius=4)
         col = TRACKS[self.track][2]
         mid = y0 + h // 2
         pygame.draw.line(self.s, GRID, (x0 + 2, mid), (x0 + w - 3, mid))
-        if self.track != 3:
+        if self.track != 3 and octave:
             self.text(self.f_sm, f"OCT {self.octave[self.track]}", DIM,
                       (x0 + 4, y0 + 2))
         if not st:
@@ -1091,30 +1477,8 @@ class App:
         self.text(self.f_sm, f"{st['sample_len'] / 48000:.1f}s", DIM,
                   (x0 + w - 4, y0 + 2), "topright")
 
-    def draw_params(self, rect):
-        x0, y0, w, h = rect
-        t = self.track
-        plist = PARAMS[t]
-        sel = self.sel[t] % len(plist)
-        for i, p in enumerate(plist):
-            y = y0 + i * 10
-            if i == sel:
-                pygame.draw.rect(self.s, PANEL, (x0, y, w, 10))
-                pygame.draw.rect(self.s, TRACKS[t][2], (x0, y, 2, 10))
-            f = self.f_smb if i == sel else self.f_sm
-            self.text(f, p[0], TEXT if i == sel else DIM, (x0 + 5, y - 1))
-            self.text(f, self.fmt(t, p), TEXT, (x0 + w - 2, y - 1),
-                      "topright")
-        if t == 3:
-            y = y0 + 34
-            names = [f"{KEY_LABEL[s]} {DRUM_NAMES[s]}"
-                     for s in (0, 2, 4, 5, 7, 9, 11, 1, 3, 6, 8, 10)]
-            for k, nm in enumerate(names):
-                self.text(self.f_sm, nm, DIM,
-                          (x0 + 5 + (k % 2) * 78, y + (k // 2) * 10))
-
-    def draw_grid(self, st, y0):
-        cw, rh, x0 = 18, 9, 30
+    def draw_grid(self, st, y0, rh=9):
+        cw, x0 = 18, 30
         step = st["step"] if st else -1
         for r in range(4):
             y = y0 + r * (rh + 1)
@@ -1144,17 +1508,136 @@ class App:
         self.text(self.f_sm, hint, DIM, (W // 2, H - 1), "midbottom")
 
     def draw_main(self, st):
-        rect = (0, 18, 150, 96)
+        rect = (0, 18, 150, 62)
         if self.track == 2:
             self.draw_sample(st, rect)
         else:
             self.draw_scope(st, rect)
-        self.draw_params((156, 18, 162, 100))
-        self.draw_grid(st, 119)
+        self.draw_tracks((154, 18, 164, 62))
+        self.draw_grid(st, 84, rh=16)
         self.draw_footer(
-            "Ctrl: 1-4 track  Q/W pick  A/S adjust  Z/X oct  B/N tempo"
+            "Ctrl: 1-4 track  Z/X oct  B/N tempo  C/V copy  R/L sample"
             if self.mod else
             "Space play  Enter rec  Fn+1-8 pattern  Tab screens  Fn+H help")
+
+    def inst_label(self, t):
+        return (self.inst[t] or "custom") + (" *" if self.inst_mod[t] else "")
+
+    def draw_tracks(self, rect):
+        """Each track's instrument; the current one highlighted."""
+        x0, y0, w, h = rect
+        rh = h // 4
+        for t, (name, _, col) in enumerate(TRACKS):
+            y = y0 + t * rh
+            on = t == self.track
+            pygame.draw.rect(self.s, PANEL if on else BG, (x0, y, w, rh - 1),
+                             border_radius=3)
+            pygame.draw.rect(self.s, col if on else GRID, (x0, y, 3, rh - 1))
+            self.text(self.f_smb, name, col if on else DIM, (x0 + 7, y + 2))
+            self.text(self.f_smb if on else self.f_sm, self.inst_label(t)[:20],
+                      TEXT if on else DIM, (x0 + 40, y + 2))
+            if t != 3:
+                self.text(self.f_sm, f"O{self.octave[t]}", DIM,
+                          (x0 + w - 4, y + 2), "topright")
+
+    def draw_sound(self, st):
+        t = self.track
+        name, _, col = TRACKS[t]
+        self.text(self.f_smb, name, col, (4, 19))
+        self.text(self.f_mid, self.inst_label(t), TEXT, (38, 17))
+        right = f"OCT {self.octave[t]}" if t != 3 else ""
+        if t == 2:
+            right = (self.sample_name[:-4] or "no sample")[:20]
+        self.text(self.f_sm, right, DIM, (W - 4, 19), "topright")
+        if self.lib:
+            self.draw_library()
+            return
+        # settings, two columns
+        plist = PARAMS[t]
+        sel = self.sel[t] % len(plist)
+        for i, p in enumerate(plist):
+            x = 2 + (i // 5) * 160
+            y = 34 + (i % 5) * 12
+            if i == sel:
+                pygame.draw.rect(self.s, PANEL, (x, y - 1, 156, 12),
+                                 border_radius=2)
+                pygame.draw.rect(self.s, col, (x, y - 1, 2, 12))
+            f = self.f_smb if i == sel else self.f_sm
+            self.text(f, p[0], TEXT if i == sel else DIM, (x + 6, y))
+            self.text(f, self.fmt(t, p), TEXT, (x + 150, y), "topright")
+        box = (0, 96, 156, 60)
+        if t == 3:
+            pygame.draw.rect(self.s, PANEL, box, border_radius=4)
+            names = [f"{KEY_LABEL[k]} {DRUM_NAMES[k]}"
+                     for k in (0, 2, 4, 5, 7, 9, 11, 1, 3, 6, 8, 10)]
+            for k, nm in enumerate(names):
+                self.text(self.f_sm, nm, DIM,
+                          (6 + (k % 2) * 76, 99 + (k // 2) * 9))
+        else:
+            self.draw_env(box)
+        self.draw_scope(st, (160, 96, 158, 60), octave=False)
+        self.draw_footer("Fn+F/X pick  Fn+Z/C change  notes play  "
+                         "Enter library")
+
+    def draw_env(self, rect):
+        """The amplitude envelope (attack, decay, sustain, release)."""
+        x0, y0, w, h = rect
+        t = self.track
+        v = self.vals[t]
+        col = TRACKS[t][2]
+        pygame.draw.rect(self.s, PANEL, rect, border_radius=4)
+        a, r = v.get(3, 5), v.get(6, 100)
+        d, sus = (v.get(4, 300), v.get(5, 0.6)) if t != 2 else (0, 1)
+        seg = [max(1.0, x) ** 0.5 for x in (a, d, r)]
+        hold = 9.0                              # sustain shown at a fixed width
+        scale = (w - 12) / (sum(seg) + hold)
+        top, bot = y0 + 8, y0 + h - 6
+        lvl = bot - (bot - top) * sus
+        xa = x0 + 6 + seg[0] * scale
+        xd = xa + seg[1] * scale
+        xs = xd + hold * scale
+        xr = xs + seg[2] * scale
+        pts = [(x0 + 6, bot), (xa, top), (xd, lvl), (xs, lvl), (xr, bot)]
+        pygame.draw.lines(self.s, col, False, pts, 2)
+        self.text(self.f_sm, "ENVELOPE", DIM, (x0 + w - 4, y0 + 2), "topright")
+
+    def draw_library(self):
+        t = self.track
+        col = TRACKS[t][2]
+        kind = KIND[t]
+        items = self.lib_items()
+        sel = min(self.lib["sel"], len(items) - 1)
+        title = {"synth": "SYNTH INSTRUMENTS (lead and bass)",
+                 "sampler": "SAMPLER INSTRUMENTS",
+                 "drums": "DRUM KITS"}[kind]
+        pygame.draw.rect(self.s, col, (2, 33, 316, 13), border_radius=3)
+        self.text(self.f_smb, title, BG, (W // 2, 39), "center")
+        rows = 8
+        top = max(0, min(sel - rows // 2, len(items) - rows))
+        orig_name = self.lib["orig"][1]
+        for k, (kd, name) in enumerate(items[top:top + rows]):
+            i = top + k
+            y = 49 + k * 12
+            if i == sel:
+                pygame.draw.rect(self.s, PANEL, (2, y - 1, 316, 12),
+                                 border_radius=2)
+                pygame.draw.rect(self.s, col, (2, y - 1, 2, 12))
+            if kd == "saveas":
+                self.text(self.f_sm, name, AMBER, (8, y))
+                continue
+            mine = name == orig_name
+            self.text(self.f_smb if i == sel else self.f_sm,
+                      ("● " if mine else "  ") + name[:30],
+                      TEXT if i == sel or mine else DIM, (8, y))
+            users = [TRACKS[k2][1] for k2 in range(4)
+                     if k2 != t and KIND[k2] == kind and self.inst[k2] == name]
+            if users:
+                self.text(self.f_sm, "on " + " ".join(users), DIM,
+                          (314, y), "topright")
+        self.text(self.f_sm, "S save your sound over it   R rename   "
+                  "U duplicate   D delete", DIM, (W // 2, 147), "midtop")
+        self.draw_footer("F/X browse (you hear each)  Enter use  P hear  "
+                         "Esc undo")
 
     def draw_edit(self, st):
         if self.track == 3:
@@ -1409,11 +1892,11 @@ class App:
         lines = [
             ("NOTES", "Z…M + S D G H J  ·  Q…P + 2 3 5 6 7 9 0"),
             ("SPACE / ENTER", "play / stop  ·  record on/off"),
-            ("TAB", "screens: main → edit → song → files"),
+            ("TAB", "screens: main → edit → sound → song → files"),
             ("EDIT SCREEN", "drums: grid · synths: play notes into steps"),
             ("FN 1-8 / FN 0", "pick pattern (at loop end) · song mode"),
             ("CTRL 1-4", "track: lead, bass, sample, drums"),
-            ("CTRL Q/W  A/S", "pick a setting  ·  change it"),
+            ("SOUND SCREEN", "Fn+F/X pick, Fn+Z/C change, Enter library"),
             ("CTRL Z/X  B/N", "octave  ·  tempo"),
             ("CTRL C / V", "copy / paste pattern"),
             ("CTRL R / L", "record sample  ·  next sample"),
@@ -1439,7 +1922,7 @@ class App:
         else:
             self.s.fill(BG)
             self.draw_top(st)
-            [self.draw_main, self.draw_edit, self.draw_song,
+            [self.draw_main, self.draw_edit, self.draw_sound, self.draw_song,
              self.draw_files][self.screen](st)
             if self.prompt:
                 self.draw_prompt()
@@ -1459,6 +1942,8 @@ class App:
         nxt = 0
         while self.running and self.eng.p.poll() is None:
             self.poll_keys()
+            if self.later:
+                self.run_later()
             now = time.time()
             if now >= nxt:
                 self.render()

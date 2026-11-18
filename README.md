@@ -1,17 +1,26 @@
 # ZSynth
 
 A pocket groovebox for the M5Stack **Cardputer Zero**: two synths, a mic
-sampler and a drum kit, eight 16-step patterns per song, a song chain, and a
-library of songs and samples.
+sampler and a drum kit, eight 16-step patterns per song, a song chain, and
+libraries of songs, samples and instruments.
 
-![Main screen](docs/drums.png) ![Song screen](docs/song.png)
+![Main screen](docs/drums.png) ![Sound screen](docs/sound.png)
+![Instrument library](docs/library.png) ![Song screen](docs/song.png)
 ![Files screen](docs/files.png)
 ![Drum grid](docs/edit-drums.png) ![Step entry](docs/edit-roll.png)
 
 ## Features
 
-- **Four tracks**: Lead synth, Bass synth, Sampler, Drums. Each track has its
-  own sound settings and pattern.
+- **Four tracks**: Lead synth, Bass synth, Sampler, Drums. Each track plays
+  an instrument and has its own pattern.
+- **Instruments**: design a track's sound on the Sound screen, and keep the
+  ones you like in the instrument library. It starts with a set of synths
+  (saw-lead, night-lead, pluck, soft-pad, bell, organ, square-bass,
+  disco-bass, acid-bass, sub-bass), sampler instruments built on the starter
+  samples (fm-piano, harpsichord, marimba, kalimba, glockenspiel, tenor-sax,
+  sax-stab, harmonica) and three drum kits. Browsing the library plays each one
+  so you can hear it, even while your pattern loops. A song keeps its own
+  copy of each instrument, so changing the library never changes old songs.
 - **Synths**: sine, triangle, saw and square oscillators (band-limited), a
   detuned second oscillator, an ADSR envelope, and a resonant low-pass filter
   with envelope modulation. Polyphonic.
@@ -35,17 +44,29 @@ library of songs and samples.
 - **Sample library**: every mic recording is saved as its own WAV. Each
   sample has a menu to play it, put it in the sampler, rename it (songs that
   use it follow the new name), duplicate it or delete it.
-- **Live scope**, step grid and settings on the 320×170 screen.
+- **Starter samples**: 18 sounds from the CC0 [Versilian Community Sample
+  Library](https://github.com/sgossner/VCSL): FM piano, clavi, harpsichord,
+  glockenspiel, marimba, balafon, harmonica, ocarina, tenor sax and a sax
+  stab, folk harp, kalimba and mbira (all retuned to play in tune), plus wine
+  glass, hand bell, gong, didgeridoo and a zither glissando for effects. See
+  [samples/CREDITS.md](samples/CREDITS.md).
+- **Demo song**: *night-shift*, an 87-second dance-punk track at 118 BPM
+  (eight patterns in a 43-bar chain). Open it on the Files screen and press
+  `Space`: song mode is already on.
+- **Live scope**, step grid and envelope picture on the 320×170 screen.
 - The open song is saved automatically when you quit or switch songs.
 
 ## Screens
 
-`Tab` cycles through four screens:
+`Tab` cycles through five screens:
 
-- **Main**: play, record, the scope and sound settings, and the current
-  pattern's step grid.
+- **Main**: play and record, with the scope, each track's instrument, and the
+  current pattern's step grid.
 - **Edit**: edit the current track of the current pattern step by step: a
   drum grid for the drums, a piano roll for the others.
+- **Sound**: the instrument designer for the current track: every setting,
+  the envelope, and the scope. Play notes to hear your changes. `Enter` opens
+  the instrument library.
 - **Song**: the eight pattern slots, with a preview of each, and the chain.
 - **Files**: songs on the left, samples on the right.
 
@@ -67,8 +88,8 @@ F1–F10, `Fn`+`F` `Z` `X` `C` gives the arrow keys, and `Fn`+`H` gives Help.
 | `Fn` + `0` | song mode on/off |
 | `Esc` | back to Main / quit (the song is saved) |
 | `Ctrl` + `1`–`4` | choose a track: lead, bass, sample, drums |
-| `Ctrl` + `Q` / `W` | choose a setting |
-| `Ctrl` + `A` / `S` | change it (hold to repeat) |
+| `Ctrl` + `Q` / `W` | on the Sound screen: choose a setting |
+| `Ctrl` + `A` / `S` | on the Sound screen: change it (hold to repeat) |
 | `Ctrl` + `Z` / `X` | octave down / up |
 | `Ctrl` + `B` / `N` | tempo down / up |
 | `Ctrl` + `C` / `V` | copy the current pattern / paste it into the current pattern |
@@ -97,6 +118,24 @@ right. The symbol keys (`[ ] - = +`) are typed the usual way on the
 Cardputer, through its symbol layer. `Space` plays and stops, so you can edit while the loop plays; the
 playhead shows on the grid. `Ctrl`+`1`–`4` switches track and `Fn`+`1`–`8`
 switches pattern, as everywhere.
+
+**Sound screen:** `Fn`+`F`/`X` pick a setting and `Fn`+`Z`/`C` change it
+(hold to repeat; `Ctrl`+`Q`/`W` and `Ctrl`+`A`/`S` work too). The note keys
+play the track so you can hear it. A `*` after the instrument's name means
+you've changed it since it came from the library. `Enter` opens the
+instrument library for this track (lead and bass share the synth ones):
+
+| Key | Action |
+| --- | --- |
+| `F` / `X` | move through the list. Each instrument is put on the track and played, so you hear it (press `Space` first to hear it in your loop) |
+| `P` | play the selected one again |
+| `Enter` | keep the selected instrument. On *+ save this sound as…*: save your sound as a new instrument |
+| `S` | save your sound over the selected instrument (press twice) |
+| `R` / `U` / `D` | rename / duplicate / delete (press twice) the selected instrument |
+| `Esc` | close and put back the sound you had |
+
+The first time the new version runs, it also saves the custom sounds in your
+existing songs as instruments, named *song*-*track*.
 
 **Song screen:** `1`–`8` insert a pattern into the chain at the cursor,
 `Backspace` removes the one before the cursor, `Z`/`C` move the cursor, and
@@ -139,6 +178,9 @@ Data lives in `~/.local/share/zsynth/`:
 - `songs/<name>.zsong` is a plain-text song file. It holds the sample name,
   the sound settings, the tempo, the chain, and every note as
   `ev pattern track step note velocity length`.
+- `instruments/<synth|sampler|drums>/<name>.zinst` is the instrument
+  library: plain text, one `param index value` line per setting (and the
+  sample's name, for sampler instruments).
 - `samples/*.wav` is the sample library. Mic recordings are named
   `rec-YYYYMMDD-HHMMSS.wav`. You can copy in your own 16-bit WAVs at any
   sample rate, mono or stereo.

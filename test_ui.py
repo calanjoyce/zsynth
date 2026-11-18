@@ -180,6 +180,80 @@ for k in (ZK, 46, 48, 49, 48, 47, 46, 16):   # a little tune to look at
 snap("roll")
 key(3, mod=True)                      # back to bass for the rest
 
+# sound screen and instrument library
+UP, DOWN, LEFT, RIGHT, ESC = 103, 108, 105, 106, 1
+lib = os.path.join(data, "instruments")
+check("starter library made",
+      {"saw-lead", "acid-bass", "sub-bass"} <=
+      set(app.inst_list("synth")) and "kit" in app.inst_list("drums"))
+check("new song tracks use the starter instruments",
+      app.inst == ["saw-lead", "square-bass", "one-shot", "kit"])
+before = dict(app.vals[1])
+key(30, mod=True)                     # Ctrl+A on EDIT: no longer edits
+check("Ctrl+A off the SOUND screen leaves the sound alone",
+      app.vals[1] == before)
+key(TAB)
+check("Tab from EDIT opens SOUND", app.screen == zsynth.S_SOUND)
+app.sel[1] = 0
+key(DOWN)                             # Fn+X: next setting (CUTOFF)
+cut = app.vals[1][1]
+key(RIGHT)                            # Fn+C: raise it
+check("Fn+X/C pick and change a setting, marked as changed",
+      app.sel[1] == 1 and app.vals[1][1] > cut and app.inst_mod[1])
+app.vals[1][9] = 0.05
+app.push(1, 9)
+mine = dict(app.vals[1])
+snap("sound")
+key(ENTER)
+check("Enter opens the library on the bass's instrument",
+      app.lib and app.lib_items()[app.lib["sel"]][1] == "square-bass")
+key(DOWN)
+heard = app.lib_items()[app.lib["sel"]][1]
+check(f"moving down auditions the next one ({heard})",
+      not app.same_sound(1, app.vals[1], mine))
+snap("library")
+key(ESC)
+check("Esc puts your sound back", app.lib is None and
+      app.vals[1] == mine and app.inst[1] == "square-bass" and app.inst_mod[1])
+key(ENTER)
+while app.lib["sel"]:
+    key(UP)
+key(ENTER)                            # "+ save this sound as..."
+for _ in range(20):
+    key(BKSP)
+for c in (48, 30, 31, 31):            # b a s s
+    key(c)
+key(ENTER)
+check("save as writes instruments/synth/bass.zinst",
+      os.path.exists(os.path.join(lib, "synth/bass.zinst")) and
+      app.inst[1] == "bass" and not app.inst_mod[1])
+key(ENTER)
+app.lib_select("acid-bass")
+key(ENTER)
+check("Enter uses acid-bass", app.inst[1] == "acid-bass" and
+      abs(app.vals[1][1] - 350) < 1)
+app.vals[1][9] = 0.05
+app.push(1, 9)
+key(ENTER)
+app.lib_select("bass")
+key(19)                               # R: rename
+for _ in range(20):
+    key(BKSP)
+for c in (34, 19, 24, 22, 44, 46):    # g r o u z c -> "grouzc"
+    key(c)
+key(ENTER)
+check("rename moves the library file",
+      os.path.exists(os.path.join(lib, "synth/grouzc.zinst")) and
+      not os.path.exists(os.path.join(lib, "synth/bass.zinst")))
+app.lib_select("grouzc")
+key(32)
+key(32)                               # D twice: delete
+check("D twice deletes it",
+      not os.path.exists(os.path.join(lib, "synth/grouzc.zinst")))
+key(ESC)
+app.save_song()
+check("the song remembers each track's instrument",
+      "inst 1 acid-bass 0" in open(app.song_path(app.song)).read())
 # song screen: chain 2 2 3 1, song mode
 key(TAB)
 for d in (3, 3, 4, 2):                # keys 2 2 3 1
@@ -248,9 +322,8 @@ with wave.open(os.path.join(samples, "rec-test.wav"), "wb") as w:
     w.writeframes(b"\0\0" * 24000)          # 0.5 s of silence
 app.sample_name = "rec-test.wav"             # the open song uses it
 app.save_song()
-key(TAB)
-key(TAB)
-key(TAB)                                     # back round to FILES
+for _ in range(4):
+    key(TAB)                                 # back round to FILES
 app.files_col = 1
 app.select_sample("rec-test.wav")
 key(ENTER)
@@ -296,7 +369,7 @@ check("second D deletes and unloads it",
       app.sample_name == "" and app.menu is None)
 key(ENTER)
 key(1)                                       # Esc closes the menu
-check("Esc closes the menu", app.menu is None and app.screen == 3)
+check("Esc closes the menu", app.menu is None and app.screen == zsynth.S_FILES)
 time.sleep(0.2)
 app.running = False
 app.save_song()
