@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """ZSynth: a pocket groovebox for the M5 Cardputer Zero.
 
-Four tracks (lead synth, bass synth, mic sampler, drum kit), eight 16-step
-patterns per song, a song chain, and a library of songs and samples. This
+Four tracks (lead synth, bass synth, mic sampler, drum kit), eight patterns
+(1-32 steps, any time signature) per song, a song chain, and a library of songs and samples. This
 file is the screen and keyboard front end; the sound comes from
 zsynth-engine (C), driven over a pipe.
 
@@ -44,6 +44,26 @@ LEGACY_SAMPLE = os.path.join(DATA, "sample.wav")
 SHM = "/dev/shm/zsynth.state"
 W, H = 320, 170
 NPAT = 8
+NSTEP = 32          # most steps a pattern can have (the engine's NSTEP)
+# where things are in /dev/shm/zsynth.state (offsets in engine.c's Shm)
+OFF_GRID, OFF_OV, OFF_EXT, OFF_PGRID = 2608, 2736, 2992, 3080
+OFF_EVN, OFF_EV, OFF_PLEN, OFF_PBEAT, SHM_SIZE = 4104, 4120, 6168, 6176, 6184
+# Time signatures: (label, steps, steps per beat). Steps are 16ths.
+METERS = [("4/4", 16, 4), ("3/4", 12, 4), ("5/4", 20, 4), ("7/4", 28, 4),
+          ("2/4", 8, 4), ("6/8", 12, 6), ("7/8", 14, 2), ("9/8", 18, 6),
+          ("12/8", 24, 6)]
+
+
+def meter_name(n, beat):
+    """"7/8" for 14 steps in eighths, "13/16" when it isn't a tidy meter."""
+    for label, ln, bt in METERS:
+        if (ln, bt) == (n, beat):
+            return label
+    if beat == 4 and n % 4 == 0:
+        return f"{n // 4}/4"
+    if beat in (2, 6) and n % 2 == 0:
+        return f"{n // 2}/8"
+    return f"{n}/16"
 
 # ---- keyboard (Linux key codes from the Cardputer Zero keymap) ----
 K_ESC, K_BKSP, K_TAB, K_ENTER, K_SPACE = 1, 14, 15, 28, 57
@@ -51,7 +71,7 @@ K_CTRL, K_ALT = 29, 56
 K_1, K_2, K_3, K_4 = 2, 3, 4, 5
 K_Q, K_W, K_A, K_S, K_Z, K_X, K_C, K_V, K_F = 16, 17, 30, 31, 44, 45, 46, 47, 33
 K_B, K_N, K_R, K_L = 48, 49, 19, 38
-K_P, K_D, K_U = 25, 32, 22
+K_P, K_D, K_U, K_M = 25, 32, 22, 50
 # Symbol layer: the Cardputer Zero sends keypad codes for the printed symbols
 # (see /usr/share/keymaps/tca8418_keypad_m5stack_keymap.map)
 K_MINUS, K_PLUS, K_EQUAL, K_LBRACE, K_RBRACE = 71, 72, 73, 74, 75
@@ -274,7 +294,7 @@ class App:
         for _ in range(60):
             try:
                 fd = os.open(SHM, os.O_RDONLY)
-                if os.fstat(fd).st_size >= 5592:
+                if os.fstat(fd).st_size >= SHM_SIZE:
                     self.shm = mmap.mmap(fd, 0, prot=mmap.PROT_READ)
                     break
                 os.close(fd)
@@ -748,28 +768,40 @@ class App:
         if not self.shm:
             return None
         hdr = struct.unpack_from("<II6i2f2i", self.shm, 0)
-        ext = struct.unpack_from("<6i", self.shm, 2928)
+        ext = struct.unpack_from("<6i", self.shm, OFF_EXT)
         return {
             "playing": hdr[2], "rec": hdr[3], "step": hdr[4], "bpm": hdr[5],
             "sampling": hdr[6], "sample_len": hdr[7], "in": hdr[8],
             "out": hdr[9], "voices": hdr[10],
             "scope": np.frombuffer(self.shm, np.float32, 640, 48),
-            "grid": np.frombuffer(self.shm, np.uint8, 64, 2608
-                                  ).reshape(4, 16),
-            "ov": np.frombuffer(self.shm, np.uint8, 256, 2672),
+            "grid": np.frombuffer(self.shm, np.uint8, 4 * NSTEP, OFF_GRID
+                                  ).reshape(4, NSTEP),
+            "ov": np.frombuffer(self.shm, np.uint8, 256, OFF_OV),
             "cur_pat": ext[0], "next_pat": ext[1], "song_mode": ext[2],
             "chain_pos": ext[3], "chain_len": ext[4], "saved_seq": ext[5],
-            "pgrid": np.frombuffer(self.shm, np.uint8, 512, 3016
-                                   ).reshape(NPAT, 4, 16),
+            "pgrid": np.frombuffer(self.shm, np.uint8, NPAT * 4 * NSTEP,
+                                   OFF_PGRID).reshape(NPAT, 4, NSTEP),
+            "plen": [max(1, int(v)) for v in
+                     np.frombuffer(self.shm, np.uint8, NPAT, OFF_PLEN)],
+            "pbeat": [max(1, int(v)) for v in
+                      np.frombuffer(self.shm, np.uint8, NPAT, OFF_PBEAT)],
         }
+
+    def pat_len(self, st=None, p=None):
+        """(steps, steps per beat) of pattern p (default: the current one)."""
+        st = st or self.status()
+        if not st:
+            return 16, 4
+        p = st["cur_pat"] if p is None else p
+        return st["plen"][p], st["pbeat"][p]
 
     def events(self, t):
         """Notes of the current pattern on track t: (step, note, vel, len)."""
         if not self.shm:
             return []
         n = min(128, max(0, struct.unpack_from("<i", self.shm,
-                                               3528 + 4 * t)[0]))
-        raw = np.frombuffer(self.shm, np.uint8, 4 * n, 3544 + t * 512)
+                                               OFF_EVN + 4 * t)[0]))
+        raw = np.frombuffer(self.shm, np.uint8, 4 * n, OFF_EV + t * 512)
         return [tuple(int(v) for v in raw[i:i + 4])
                 for i in range(0, 4 * n, 4)]
 
@@ -823,7 +855,8 @@ class App:
             if code in self.entry_held:
                 self.entry_held.discard(code)
                 if not self.entry_held:   # chord done: move on
-                    self.cur_step = (self.entry_at + self.step_len) % 16
+                    self.cur_step = ((self.entry_at + self.step_len) %
+                                     self.pat_len()[0])
             return
         if self.prompt:
             if val == 1 or code == K_BKSP:
@@ -916,7 +949,7 @@ class App:
         mv = ARROW.get(code) or (GRID_ARROW.get(code) if t == 3 else None)
         if mv:                                  # arrows repeat when held
             dx, dy = mv
-            self.cur_step = (self.cur_step + dx) % 16
+            self.cur_step = (self.cur_step + dx) % self.pat_len()[0]
             if t == 3 and dy:
                 self.drum_row = (self.drum_row + dy) % len(DRUM_ROWS)
             return
@@ -979,11 +1012,11 @@ class App:
                 self.eng.send("on", t, n, VEL_NORMAL)
             self.entry_held.add(code)
         elif code == K_ENTER:                   # rest: skip ahead
-            self.cur_step = (s + self.step_len) % 16
+            self.cur_step = (s + self.step_len) % self.pat_len()[0]
         elif code in (K_BKSP, K_DEL):
             self.eng.send("stepdel", p, t, s, -1)
         elif code in (K_MINUS, K_EQUAL, K_PLUS):    # note length
-            self.step_len = max(1, min(16, self.step_len +
+            self.step_len = max(1, min(NSTEP, self.step_len +
                                        (-1 if code == K_MINUS else 1)))
             for e in here:
                 self.eng.send("stepset", p, t, s, e[1], e[2], self.step_len)
@@ -993,8 +1026,19 @@ class App:
             self.chain_cur = max(0, self.chain_cur - 1)
         elif code in (K_RIGHT, K_C):
             self.chain_cur = min(len(self.chain), self.chain_cur + 1)
+        elif code in (K_MINUS, K_EQUAL, K_PLUS):    # length (repeats)
+            p = self.cur_pat()
+            n, beat = self.pat_len(p=p)
+            n = max(1, min(NSTEP, n + (-1 if code == K_MINUS else 1)))
+            self.set_pat_len(p, n, beat)
         elif val != 1:
             return
+        elif code == K_M:                       # next time signature
+            p = self.cur_pat()
+            now = self.pat_len(p=p)
+            i = next((k for k, m in enumerate(METERS) if m[1:] == now), -1)
+            label, n, beat = METERS[(i + 1) % len(METERS)]
+            self.set_pat_len(p, n, beat)
         elif K_1 <= code <= K_1 + 7:
             if len(self.chain) < 64:
                 self.chain.insert(self.chain_cur, code - K_1)
@@ -1009,6 +1053,10 @@ class App:
             self.toggle_song_mode()
         elif code == K_ESC:
             self.screen = 0
+
+    def set_pat_len(self, p, n, beat):
+        self.eng.send("plen", p, n, beat)
+        self.flash(f"pattern {p + 1}: {meter_name(n, beat)}, {n} steps")
 
     def files_key(self, code, val):
         col = self.files_col
@@ -1478,7 +1526,8 @@ class App:
                   (x0 + w - 4, y0 + 2), "topright")
 
     def draw_grid(self, st, y0, rh=9):
-        cw, x0 = 18, 30
+        n, beat = self.pat_len(st)
+        cw, x0 = (18 if n <= 16 else max(9, 288 // n)), 30
         step = st["step"] if st else -1
         for r in range(4):
             y = y0 + r * (rh + 1)
@@ -1486,12 +1535,12 @@ class App:
             self.text(self.f_smb if on else self.f_sm, TRACKS[r][1],
                       TRACKS[r][2] if on else DIM, (x0 - 6, y + rh // 2),
                       "midright")
-            for c in range(16):
+            for c in range(n):
                 x = x0 + c * cw
-                n = st["grid"][r][c] if st else 0
-                col = TRACKS[r][2] if n else (PANEL if c // 4 % 2 == 0
-                                              else (32, 36, 46))
-                if n and not on:
+                hit = st["grid"][r][c] if st else 0
+                col = TRACKS[r][2] if hit else (PANEL if c // beat % 2 == 0
+                                                else (32, 36, 46))
+                if hit and not on:
                     col = tuple(int(v * 0.55) for v in col)
                 pygame.draw.rect(self.s, col, (x, y, cw - 2, rh),
                                  border_radius=2)
@@ -1645,20 +1694,40 @@ class App:
         else:
             self.draw_roll(st)
 
-    def step_cols(self, x0, cw, y0, h, st):
-        """Beat shading and playhead behind a 16-step grid."""
-        for c in range(16):
-            if c // 4 % 2:
+    def edit_view(self, st):
+        """The steps the Edit screen shows: up to 16 at a time, the page
+        with the cursor on it. (start, count, pattern length, beat)."""
+        n, beat = self.pat_len(st)
+        if self.cur_step >= n:
+            self.cur_step %= n
+        start = self.cur_step // 16 * 16
+        return start, min(16, n - start), n, beat
+
+    def step_cols(self, x0, cw, y0, h, st, view):
+        """Beat shading and playhead behind the Edit screen's steps."""
+        start, cols, n, beat = view
+        for c in range(cols):
+            if (start + c) // beat % 2:
                 pygame.draw.rect(self.s, (18, 21, 28),
                                  (x0 + c * cw, y0, cw, h))
-        if st and st["playing"]:
+        if st and st["playing"] and start <= st["step"] < start + cols:
             pygame.draw.rect(self.s, (52, 58, 74),
-                             (x0 + st["step"] * cw, y0, cw, h))
+                             (x0 + (st["step"] - start) * cw, y0, cw, h))
+
+    def view_label(self, view):
+        start, cols, n, beat = view
+        label = f"{meter_name(n, beat)}  {n} steps"
+        if n > 16:
+            label = f"steps {start + 1}-{start + cols} of {n}   " + \
+                meter_name(n, beat)
+        return label
 
     def draw_drum_grid(self, st):
-        x0, cw, y0, rh = 50, 16, 18, 13
+        x0, cw, y0, rh = 50, 16, 18, 12
         col = TRACKS[3][2]
-        self.step_cols(x0, cw, y0, rh * len(DRUM_ROWS), st)
+        view = self.edit_view(st)
+        start, cols = view[0], view[1]
+        self.step_cols(x0, cw, y0, rh * len(DRUM_ROWS), st, view)
         hits = {}
         for s, n, v, _ in self.events(3):
             key = (s, DRUM_OF_SEMI[n % 12])
@@ -1668,9 +1737,9 @@ class App:
             on = r == self.drum_row
             self.text(self.f_smb if on else self.f_sm, name,
                       TEXT if on else DIM, (x0 - 5, y + rh // 2), "midright")
-            for c in range(16):
+            for c in range(cols):
                 x = x0 + c * cw
-                v = hits.get((c, drum))
+                v = hits.get((start + c, drum))
                 if v:
                     shade = col if v >= VEL_ACCENT else \
                         tuple(int(k * 0.7) for k in col)
@@ -1683,9 +1752,14 @@ class App:
                 else:
                     pygame.draw.rect(self.s, PANEL, (x + 5, y + 4, cw - 11,
                                                      rh - 9), border_radius=1)
-        cx, cy = x0 + self.cur_step * cw, y0 + self.drum_row * rh
+        cx = x0 + (self.cur_step - start) * cw
+        cy = y0 + self.drum_row * rh
         pygame.draw.rect(self.s, AMBER, (cx - 1, cy - 1, cw + 1, rh + 1), 1,
                          border_radius=3)
+        self.text(self.f_sm, f"STEP {self.cur_step + 1}", col,
+                  (x0, y0 + rh * len(DRUM_ROWS) + 2))
+        self.text(self.f_sm, self.view_label(view), DIM,
+                  (W - 4, y0 + rh * len(DRUM_ROWS) + 2), "topright")
         self.draw_footer("F/X drum  Z/C step  Enter hit  A accent  "
                          "[ ] shift  Bksp clear row")
 
@@ -1695,34 +1769,44 @@ class App:
         x0, cw, y0, rh = 30, 18, 18, 4
         lo = self.note_for(t, 0)                # lowest note-key pitch
         top = y0 + ROLL_ROWS * rh
-        self.step_cols(x0, cw, y0, ROLL_ROWS * rh, st)
+        view = self.edit_view(st)
+        start, cols, plen = view[0], view[1], view[2]
+        self.step_cols(x0, cw, y0, ROLL_ROWS * rh, st, view)
         for r in range(ROLL_ROWS):              # octave lines and labels
             n = lo + r
             y = top - (r + 1) * rh
             if n % 12 == 0:
                 pygame.draw.line(self.s, GRID, (x0, y + rh - 1),
-                                 (x0 + 16 * cw, y + rh - 1))
+                                 (x0 + cols * cw, y + rh - 1))
                 self.text(self.f_sm, f"C{n // 12 - 1}", DIM,
                           (x0 - 4, y + rh), "bottomright")
             elif NOTE_NAMES[n % 12].endswith("#"):
                 pygame.draw.rect(self.s, (14, 16, 21),
-                                 (x0, y, 16 * cw, rh))
+                                 (x0, y, cols * cw, rh))
         evs = self.events(t)
         for s, n, v, ln in evs:
+            if s >= plen:                       # hidden past the end
+                continue
             r = n - lo
-            x = x0 + s * cw
-            w = min(ln * cw, 16 * cw - s * cw) - 2
             if r < 0 or r >= ROLL_ROWS:         # outside the view: edge mark
-                y = top - 2 if r < 0 else y0
-                pygame.draw.rect(self.s, DIM, (x + 1, y, cw - 3, 2))
+                if start <= s < start + cols:
+                    y = top - 2 if r < 0 else y0
+                    pygame.draw.rect(self.s, DIM,
+                                     (x0 + (s - start) * cw + 1, y, cw - 3, 2))
                 continue
             y = top - (r + 1) * rh
-            pygame.draw.rect(self.s, col, (x + 1, y, max(3, w), rh - 1),
-                             border_radius=1)
-            if s + ln > 16:                     # wraps past the loop end
-                pygame.draw.rect(self.s, col, (x0, y, (s + ln - 16) * cw - 2,
-                                               rh - 1), border_radius=1)
-        cx = x0 + self.cur_step * cw
+            # the steps it covers, wrapping past the loop end
+            spans = [(s, min(s + ln, plen))]
+            if s + ln > plen:
+                spans.append((0, s + ln - plen))
+            for a, b in spans:
+                a, b = max(a, start), min(b, start + cols)
+                if a < b:
+                    pygame.draw.rect(self.s, col,
+                                     (x0 + (a - start) * cw + 1, y,
+                                      max(3, (b - a) * cw - 2), rh - 1),
+                                     border_radius=1)
+        cx = x0 + (self.cur_step - start) * cw
         pygame.draw.rect(self.s, AMBER, (cx, y0, cw - 1, ROLL_ROWS * rh), 1,
                          border_radius=2)
         # what's on the cursor step
@@ -1731,8 +1815,10 @@ class App:
         y = top + 3
         self.text(self.f_smb, f"STEP {self.cur_step + 1}", col, (4, y))
         self.text(self.f_sm, names or "rest", TEXT if here else DIM, (54, y))
-        self.text(self.f_sm, f"LEN {self.step_len}   OCT {self.octave[t]}",
-                  DIM, (W - 4, y), "topright")
+        right = f"LEN {self.step_len}   OCT {self.octave[t]}"
+        if plen != 16 or view[3] != 4:
+            right = self.view_label(view).split("   ")[0] + "   " + right
+        self.text(self.f_sm, right, DIM, (W - 4, y), "topright")
         self.draw_footer("notes write  Fn+Z/C step  Enter skip  Bksp del  "
                          "- = len  [ ] shift")
 
@@ -1743,7 +1829,9 @@ class App:
         for p in range(NPAT):
             x = 2 + (p % 4) * 79
             y = 19 + (p // 4) * 35
-            g = st["pgrid"][p] if st else np.zeros((4, 16), np.uint8)
+            g = st["pgrid"][p] if st else np.zeros((4, NSTEP), np.uint8)
+            n, beat = self.pat_len(st, p)
+            g = g[:, :n]
             empty = not g.any()
             pygame.draw.rect(self.s, PANEL, (x, y, 76, 32), border_radius=4)
             border = TEXT if p == cur else (AMBER if p == nxt and blink
@@ -1753,21 +1841,29 @@ class App:
                                  border_radius=4)
             self.text(self.f_smb, str(p + 1), TEXT if p == cur else DIM,
                       (x + 4, y + 1))
+            if (n, beat) != (16, 4):
+                self.text(self.f_sm, meter_name(n, beat), AMBER,
+                          (x + 73, y + 1), "topright")
             if empty:
                 self.text(self.f_sm, "empty", GRID, (x + 44, y + 16),
                           "center")
                 continue
+            cwf = 64 / n
             for r in range(4):
-                for c in range(16):
+                for c in range(n):
                     if g[r][c]:
                         pygame.draw.rect(self.s, TRACKS[r][2],
-                                         (x + 11 + c * 4, y + 6 + r * 6, 3, 5))
+                                         (x + 11 + int(c * cwf), y + 12 + r * 5,
+                                          max(1, int(cwf) - 1), 4))
         # chain
         y0 = 92
         song = st and st["song_mode"]
         self.text(self.f_smb, "CHAIN", TEXT, (4, y0))
         self.text(self.f_sm, "song mode ON" if song else "song mode off",
                   AMBER if song else DIM, (W - 4, y0), "topright")
+        n, beat = self.pat_len(st)
+        self.text(self.f_sm, f"P{cur + 1}: {meter_name(n, beat)}, {n} steps",
+                  TEXT, (W // 2 - 10, y0), "midtop")
         per_row, cw = 16, 19
         first = max(0, (self.chain_cur // per_row - 1) * per_row)
         for k in range(2 * per_row):
@@ -1788,8 +1884,8 @@ class App:
         if not self.chain:
             self.text(self.f_sm, "press 1-8 to add patterns to the chain",
                       DIM, (W // 2, y0 + 24), "center")
-        self.draw_footer("1-8 add  Bksp remove  Z/C move  Enter song mode  "
-                         "Ctrl+C/V copy")
+        self.draw_footer("1-8 add  Bksp del  Z/C move  Enter song mode  "
+                         "- = length  M meter")
 
     def draw_files(self, st):
         self.text(self.f_smb, "SONG", DIM, (4, 19))
@@ -1901,7 +1997,7 @@ class App:
             ("CTRL C / V", "copy / paste pattern"),
             ("CTRL R / L", "record sample  ·  next sample"),
             ("BKSP / CTRL", "undo note  ·  clear track"),
-            ("SONG SCREEN", "1-8 add to chain, Enter song mode"),
+            ("SONG SCREEN", "1-8 chain · Enter song mode · - = M length"),
             ("ESC", "back / quit (everything is saved)"),
         ]
         self.text(self.f_mid, "ZSynth keys", TEXT, (6, 2))

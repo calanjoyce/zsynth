@@ -2,8 +2,10 @@
  * zsynth-engine: real-time audio engine for ZSynth on the Cardputer Zero.
  *
  * Four tracks: 0 lead synth, 1 bass synth, 2 sampler, 3 drum kit.
- * A 16-step sequencer records what is played live (quantised to 16ths), and
+ * A step sequencer records what is played live (quantised to 16ths), and
  * notes can also be written one step at a time (stepset / stepdel / shift).
+ * Each pattern has its own length (1-32 steps) and beat size (steps per
+ * metronome click: 4 for x/4 meters, 2 or 6 for x/8), set with "plen".
  *
  * Control: newline-separated text commands on stdin (see handle_cmd).
  * Status:  a small struct mmapped at /dev/shm/zsynth.state for the UI.
@@ -29,7 +31,7 @@
 #define SR 48000
 #define BLOCK 256
 #define NTRACK 4
-#define NSTEP 16
+#define NSTEP 32   /* most steps a pattern can have */
 #define MAXEV 128
 #define NVOICE 24
 #define NPARAM 10
@@ -62,6 +64,7 @@ typedef struct {
        per track a count, then (step, note, vel, len) per event */
     int32_t ev_n[NTRACK];
     uint8_t ev[NTRACK][MAXEV][4];
+    uint8_t plen[NPAT], pbeat[NPAT];   /* each pattern's length and beat */
 } Shm;
 
 typedef struct {
@@ -80,6 +83,7 @@ static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static float P[NTRACK][NPARAM];
 static Ev evs[NPAT][NTRACK][MAXEV];
 static int nev[NPAT][NTRACK];
+static int plen[NPAT], pbeat[NPAT];
 static int cur_pat, next_pat = -1, song_mode, chain_pos, chain_len, saved_seq;
 static int chain[MAXCHAIN];
 static int just_started;
@@ -318,7 +322,10 @@ static void seq_tick(void) {
             note_on(tr, e->note, e->vel, 1,
                     now_t + (long long)(e->len * len * 0.92));
         }
-    if (rec && step % 4 == 0) { click_env = step == 0 ? 0.5f : 0.25f; click_ph = 0; }
+    if (rec && step % pbeat[cur_pat] == 0) {
+        click_env = step == 0 ? 0.5f : 0.25f;
+        click_ph = 0;
+    }
 }
 
 static void render(int16_t *out, int n) {
@@ -328,7 +335,7 @@ static void render(int16_t *out, int n) {
             step_phase += 1;
             if (step_phase >= sps()) {
                 step_phase -= sps();
-                step = (step + 1) % NSTEP;
+                if (++step >= plen[cur_pat]) step = 0;
                 seq_tick();
             }
         }
@@ -386,6 +393,10 @@ static void publish(void) {
     shm->chain_pos = chain_pos;
     shm->chain_len = chain_len;
     shm->saved_seq = saved_seq;
+    for (int p = 0; p < NPAT; p++) {
+        shm->plen[p] = (uint8_t)plen[p];
+        shm->pbeat[p] = (uint8_t)pbeat[p];
+    }
     for (int i = 0; i < MAXCHAIN; i++) shm->chain[i] = (uint8_t)chain[i];
     shm->frame++;
 }
@@ -548,6 +559,9 @@ static void pat_save(const char *path) {
     for (int i = 0; i < chain_len; i++) fprintf(f, " %d", chain[i]);
     fprintf(f, "\n");
     for (int p = 0; p < NPAT; p++)
+        if (plen[p] != 16 || pbeat[p] != 4)
+            fprintf(f, "len %d %d %d\n", p, plen[p], pbeat[p]);
+    for (int p = 0; p < NPAT; p++)
         for (int tr = 0; tr < NTRACK; tr++)
             for (int i = 0; i < nev[p][tr]; i++) {
                 Ev *e = &evs[p][tr][i];
@@ -562,6 +576,16 @@ static void reset_song(void) {
     memset(pend, -1, sizeof pend);
     chain_len = chain_pos = song_mode = cur_pat = 0;
     next_pat = -1;
+    for (int p = 0; p < NPAT; p++) { plen[p] = 16; pbeat[p] = 4; }
+}
+
+static void set_len(int p, int n, int beat) {
+    if (p < 0 || p >= NPAT) return;
+    plen[p] = n < 1 ? 1 : n > NSTEP ? NSTEP : n;
+    pbeat[p] = beat < 1 ? 1 : beat > NSTEP ? NSTEP : beat;
+    /* notes past the end are kept (they come back if it grows again) */
+    for (int tr = 0; tr < NTRACK; tr++)
+        for (int i = 0; i < nev[p][tr]; i++) evs[p][tr][i].skip = 0;
 }
 
 static void parse_chain(const char *s) {
@@ -612,7 +636,9 @@ static void shift_ev(int p, int tr, int d) {
         if (tr >= 0 && t != tr) continue;
         for (int i = 0; i < nev[p][t]; i++) {
             Ev *e = &evs[p][t][i];
-            e->step = (uint8_t)(((e->step + d) % NSTEP + NSTEP) % NSTEP);
+            int n = plen[p];
+            if (e->step >= n) continue;        /* hidden past the end */
+            e->step = (uint8_t)(((e->step + d) % n + n) % n);
             e->skip = 0;
         }
     }
@@ -631,6 +657,7 @@ static void pat_load(const char *path) {
         if (sscanf(ln, "bpm %d", &b) == 1) { if (b >= 40 && b <= 300) bpm = b; }
         else if (sscanf(ln, "songmode %d", &b) == 1) song_mode = b != 0;
         else if (!strncmp(ln, "chain", 5)) parse_chain(ln + 5);
+        else if (sscanf(ln, "len %d %d %d", &p, &st, &b) == 3) set_len(p, st, b);
         else if (sscanf(ln, "ev %d %d %d %d %d %d", &p, &tr, &st, &no, &ve, &le) == 6)
             add_ev(p, tr, st, no, ve, le);
         else if (sscanf(ln, "ev %d %d %d %d %d", &tr, &st, &no, &ve, &le) == 5)
@@ -660,7 +687,8 @@ static void handle_cmd(char *ln) {
         if (playing && rec && pn[tr] < MAXEV) {
             double pos = step + step_phase / sps();
             int q = (int)floor(pos + 0.5);
-            Ev e = {(uint8_t)(q % NSTEP), (uint8_t)a, (uint8_t)b, 1, (uint8_t)(q > step)};
+            Ev e = {(uint8_t)(q % plen[cur_pat]), (uint8_t)a, (uint8_t)b, 1,
+                    (uint8_t)(q > step)};
             pat[tr][pn[tr]] = e;
             pend[tr][a] = pn[tr]++;
             pend_p[tr][a] = cur_pat;
@@ -671,16 +699,17 @@ static void handle_cmd(char *ln) {
         int i = pend[tr][a], p = pend_p[tr][a];
         if (i >= 0 && i < nev[p][tr]) {
             int l = (int)floor((now_t - pend_t[tr][a]) / sps() + 0.5);
-            evs[p][tr][i].len = (uint8_t)(l < 1 ? 1 : l > 16 ? 16 : l);
+            evs[p][tr][i].len = (uint8_t)(l < 1 ? 1 : l > NSTEP ? NSTEP : l);
         }
         pend[tr][a] = -1;
     } else if (sscanf(ln, "set %d %d %f", &tr, &a, &x) == 3 && tr >= 0 && tr < NTRACK && a >= 0 && a < NPARAM) {
         P[tr][a] = x;
     } else if (!strncmp(ln, "play", 4)) {
-        playing = 1; step = NSTEP - 1; step_phase = sps() - 1;
+        playing = 1;
         just_started = 1;
         if (song_mode && chain_len) { chain_pos = 0; switch_pattern(chain[0]); }
         else if (next_pat >= 0) { switch_pattern(next_pat); next_pat = -1; }
+        step = plen[cur_pat] - 1; step_phase = sps() - 1;
     } else if (!strncmp(ln, "stop", 4)) {
         playing = 0;
         for (int i = 0; i < NVOICE; i++) if (V[i].seq) V[i].stage = 3;
@@ -699,9 +728,16 @@ static void handle_cmd(char *ln) {
     } else if (!strncmp(ln, "chain", 5) && (ln[5] == ' ' || ln[5] == '\n')) {
         parse_chain(ln + 5);
     } else if (sscanf(ln, "copy %d %d", &a, &b) == 2 && a >= 0 && a < NPAT && b >= 0 && b < NPAT) {
-        if (a != b) { memcpy(evs[b], evs[a], sizeof evs[a]); memcpy(nev[b], nev[a], sizeof nev[a]); }
+        if (a != b) {
+            memcpy(evs[b], evs[a], sizeof evs[a]);
+            memcpy(nev[b], nev[a], sizeof nev[a]);
+            set_len(b, plen[a], pbeat[a]);
+        }
     } else if (sscanf(ln, "clearpat %d", &a) == 1 && a >= 0 && a < NPAT) {
         memset(nev[a], 0, sizeof nev[a]);
+    } else if (!strncmp(ln, "plen ", 5)) {
+        int p, n, bt;
+        if (sscanf(ln + 5, "%d %d %d", &p, &n, &bt) == 3) set_len(p, n, bt);
     } else if (!strncmp(ln, "stepset ", 8)) {
         int p, st, no, ve, le;
         if (sscanf(ln + 8, "%d %d %d %d %d %d", &p, &tr, &st, &no, &ve, &le) == 6
@@ -782,6 +818,7 @@ int main(void) {
     memset(shm, 0, sizeof(Shm));
     shm->magic = 0x5a53594e;
     rec_buf = malloc(sizeof(float) * MAXSAMP);
+    reset_song();    /* also every pattern: 16 steps, 4/4 */
     memset(pend, -1, sizeof pend);
     for (int t = 0; t < NTRACK; t++) {
         P[t][P_CUT] = 12000; P[t][P_ATK] = 0.003f; P[t][P_DEC] = 0.3f;

@@ -272,6 +272,71 @@ check(f"song plays the chain in order (heard {[p + 1 for p in pats]})",
 snap("song")
 key(SPACE)
 
+# pattern length and time signature (pattern 6, on the Song screen)
+MINUS, EQUAL, M = 71, 73, 50
+key(F(10))                            # song mode off
+key(F(6))
+time.sleep(0.1)
+check("Fn+6 picks pattern 6", st()["cur_pat"] == 5)
+key(M)
+time.sleep(0.1)
+check("M sets 3/4 (12 steps)", app.pat_len(p=5) == (12, 4))
+for _ in range(5):
+    key(M)
+time.sleep(0.1)
+check(f"M again reaches 7/8 ({zsynth.meter_name(*app.pat_len(p=5))})",
+      app.pat_len(p=5) == (14, 2))
+for _ in range(3):
+    key(EQUAL)
+time.sleep(0.1)
+check("= lengthens it", app.pat_len(p=5) == (17, 2) and
+      zsynth.meter_name(17, 2) == "17/16")
+for _ in range(3):
+    key(MINUS)
+time.sleep(0.1)
+app.eng.send("stepset", 5, 3, 13, 36, 100, 1)      # kick on the last step
+app.eng.send("stepset", 5, 3, 0, 36, 100, 1)
+key(SPACE)
+steps = set()
+t0 = time.time()
+while time.time() - t0 < 4 * 14 * sps:
+    steps.add(st()["step"])
+    time.sleep(0.01)
+key(SPACE)
+check(f"a 14-step pattern loops 0-13 (saw {min(steps)}-{max(steps)})",
+      max(steps) == 13 and min(steps) == 0)
+for _ in range(6):
+    key(MINUS)
+time.sleep(0.1)
+check("shortened to 8 steps, the note on step 14 is kept",
+      app.pat_len(p=5)[0] == 8 and any(e[0] == 13 for e in app.events(3)))
+for _ in range(6):
+    key(EQUAL)
+time.sleep(0.1)
+check("lengthened again, it's back in the grid",
+      app.pat_len(p=5)[0] == 14 and st()["pgrid"][5][3][13] > 0)
+key(46, mod=True)                     # Ctrl+C pattern 6
+key(F(7))
+key(47, mod=True)                     # Ctrl+V into 7
+time.sleep(0.1)
+check("copying a pattern copies its length", app.pat_len(p=6) == (14, 2))
+snap("song-meter")
+app.eng.send("plen", 5, 32, 4)
+key(F(6))
+app.screen = zsynth.S_EDIT
+key(5, mod=True)                      # drums
+app.cur_step = 20
+app.render()
+check("the Edit screen pages to steps 17-32",
+      app.edit_view(st())[:3] == (16, 16, 32))
+snap("edit-32")
+app.eng.send("plen", 5, 14, 2)
+key(3, mod=True)                      # back to bass
+app.save_song()
+check("the song file keeps the lengths",
+      "len 5 14 2" in open(app.song_path(app.song)).read())
+app.screen = zsynth.S_SONG
+
 # files: save as, new song, reopen
 key(TAB)
 app.files_col = 0

@@ -1,7 +1,8 @@
 # ZSynth
 
 A pocket groovebox for the M5Stack **Cardputer Zero**: two synths, a mic
-sampler and a drum kit, eight 16-step patterns per song, a song chain, and
+sampler and a drum kit, eight patterns per song (1–32 steps, any time
+signature), a song chain, and
 libraries of songs, samples and instruments.
 
 ![Main screen](docs/drums.png) ![Sound screen](docs/sound.png)
@@ -29,10 +30,15 @@ libraries of songs, samples and instruments.
   mode. You can also load your own 16-bit WAV files.
 - **Drums**: ten synthesised sounds: kick, snare, clap, rim, closed and open
   hats, low and high toms, cowbell and crash.
-- **Sequencer**: a 16-step loop. Arm recording and play along; notes snap to
-  16ths, note lengths are kept, and a metronome clicks while you record.
+- **Sequencer**: a loop of 16th-note steps. Arm recording and play along;
+  notes snap to 16ths, note lengths are kept, and a metronome clicks on each
+  beat while you record.
+- **Pattern length and time signature**: each pattern has its own length,
+  from 1 to 32 steps, and a beat (4 steps for x/4, 2 or 6 for x/8). Presets
+  for 4/4, 3/4, 5/4, 7/4, 2/4, 6/8, 7/8, 9/8 and 12/8. In song mode each
+  pattern plays its own length, so a 7/8 bar can follow a 4/4 one.
 - **Step editing**: the Edit screen turns the drum track into a classic drum
-  machine grid (10 drums × 16 steps, with accents). On the other tracks it
+  machine grid (10 drums × the pattern's steps, with accents). On the other tracks it
   becomes a piano roll: play notes or chords and they're written into the
   step under the cursor. You can also set note lengths, enter rests, delete
   steps and shift a whole track left or right.
@@ -139,7 +145,15 @@ existing songs as instruments, named *song*-*track*.
 
 **Song screen:** `1`–`8` insert a pattern into the chain at the cursor,
 `Backspace` removes the one before the cursor, `Z`/`C` move the cursor, and
-`Enter` turns song mode on or off.
+`Enter` turns song mode on or off. For the current pattern (`Fn`+`1`–`8`),
+`-` / `=` (or `+`) make it a step shorter or longer (hold to repeat), and `M`
+steps through the time signatures. The screen shows the current pattern's
+meter and length, and tags each pattern that isn't 4/4. Shortening a pattern
+keeps the notes past the new end: they come back when you lengthen it again.
+Copying a pattern (`Ctrl`+`C`/`V`) copies its length too.
+
+On the Edit screen, a pattern longer than 16 steps is shown 16 steps at a
+time; moving the cursor past the edge turns the page.
 
 **Files screen:** `F`/`X` move up and down, `Z`/`C` switch between Songs and
 Samples, `Enter` opens a song (or runs *new song* / *save as…*, which ask for
@@ -176,8 +190,9 @@ sample's length and how many songs use it.
 Data lives in `~/.local/share/zsynth/`:
 
 - `songs/<name>.zsong` is a plain-text song file. It holds the sample name,
-  the sound settings, the tempo, the chain, and every note as
-  `ev pattern track step note velocity length`.
+  the sound settings, the tempo, the chain, each pattern's length and beat
+  as `len pattern steps beat` (left out for 16-step 4/4 patterns), and every
+  note as `ev pattern track step note velocity length`.
 - `instruments/<synth|sampler|drums>/<name>.zinst` is the instrument
   library: plain text, one `param index value` line per setting (and the
   sample's name, for sampler instruments).
